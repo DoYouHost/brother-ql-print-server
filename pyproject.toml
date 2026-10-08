@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "label-printer"
 description = "Print server for Brother QL label printers, made for a Raspberry Pi"
 requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 dynamic = ["version", "dependencies"]
 
 [project.scripts]
