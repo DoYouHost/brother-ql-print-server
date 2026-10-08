@@ -40,7 +40,7 @@ htmlcov/
 *.swp
 *.swo
 
-# OS / temporary files
+# OS / temporary filesdrukuj 
 .DS_Store
 Thumbs.db
 tmp/
@@ -48,3 +48,4 @@ tmp/
 
 # Project specification (local only)
 docs/specyfikacja_projektowa.md
+docs/labels/*

@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, Response
 import numpy as np
 from pdf2image import convert_from_bytes
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from brother_ql.backends.helpers import send
 from brother_ql.conversion import convert
@@ -24,8 +24,8 @@ app = FastAPI(title="Brother QL-600 Print Server")
 # Working canvas (300 DPI, DK-11209 62x29 mm label)
 CANVAS_WIDTH = 696
 CANVAS_HEIGHT = 271
-MARGIN_X = 24
-MARGIN_Y = 24
+MARGIN_X = 8
+MARGIN_Y = 8
 SAFE_WIDTH = CANVAS_WIDTH - (MARGIN_X * 2)
 SAFE_HEIGHT = CANVAS_HEIGHT - (MARGIN_Y * 2)
 
@@ -33,6 +33,11 @@ MAX_COPIES = 50
 GAP_THRESHOLD = 10  # vertical gaps up to this height do not split a content block
 MIN_GAP = 8  # smallest gap kept between repacked strips
 MAX_SCALE = 2.0
+QR_PAD = 6
+QR_TEXT_GAP = 16  # minimum clearance between the text block and the QR code
+# convert() binarizes at ~30% brightness, so anything lighter than this never
+# prints (frames, shadows) and must not count as content
+INK_THRESHOLD = 160
 
 PRINTER_DEVICE = os.getenv("PRINTER_DEVICE", "/dev/usb/lp0")
 MODEL = os.getenv("PRINTER_MODEL", "QL-600")
@@ -45,17 +50,61 @@ def flatten_to_rgb(img: Image.Image) -> Image.Image:
     return Image.alpha_composite(background, rgba).convert("RGB")
 
 
-def segment_and_repack(img: Image.Image) -> Image.Image:
-    """Crop dead margins, split content into strips and rebalance them vertically.
+def find_qr(gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    """Tight bounding box (x, y, w, h) of a QR code in the image, or None."""
+    found, points = cv2.QRCodeDetector().detect(gray)
+    if not found:
+        return None
+    x, y, w, h = cv2.boundingRect(points.astype(np.int32))
+    # The detector's corners can land a pixel inside the symbol, so take the
+    # box from the ink in a slightly larger window
+    x0, y0 = max(0, x - QR_PAD), max(0, y - QR_PAD)
+    ys, xs = np.nonzero(gray[y0 : y + h + QR_PAD, x0 : x + w + QR_PAD] < INK_THRESHOLD)
+    if xs.size == 0:
+        return None
+    return (
+        x0 + int(xs.min()),
+        y0 + int(ys.min()),
+        int(xs.max() - xs.min()) + 1,
+        int(ys.max() - ys.min()) + 1,
+    )
+
+
+def render_qr(crop: Image.Image, size: int) -> Image.Image:
+    """Redraw a QR code at `size` px from its module grid, so modules stay uniform and crisp.
+
+    Resampling the bitmap smears modules whenever the scale is not a whole
+    number, and some codes stop decoding. Falls back to a plain nearest-neighbour
+    resize if the grid cannot be read.
+    """
+    ink = np.array(crop.convert("L")) < 128
+    top = ink[min(2, ink.shape[0] - 1)]
+    start = int(np.argmax(top))
+    run = len(top) - start if top[start:].all() else int(np.argmin(top[start:]))
+    if top.any() and run > 0:
+        # The first black run on the top row is the 7-module finder pattern;
+        # QR sizes are 21 + 4k modules
+        modules = 21 + 4 * max(0, round((ink.shape[1] / (run / 7) - 21) / 4))
+        rows = ((np.arange(modules) + 0.5) * ink.shape[0] / modules).astype(int)
+        cols = ((np.arange(modules) + 0.5) * ink.shape[1] / modules).astype(int)
+        ink = ink[np.ix_(rows, cols)]
+    grid = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8))
+    return grid.resize((size, size), Image.Resampling.NEAREST).convert("RGB")
+
+
+def layout_strips(
+    canvas: Image.Image,
+    img: Image.Image,
+    area: Tuple[int, int, int, int],
+    align_left: bool,
+) -> None:
+    """Crop dead margins, split content into strips and rebalance them vertically inside `area`.
 
     Raises ValueError when the image has no printable content.
     """
-    img = flatten_to_rgb(img)
-    if img.height > img.width:
-        img = img.rotate(90, expand=True)
-
+    area_x, area_y, area_w, area_h = area
     gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-    _, thresh = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(gray, INK_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
 
     # Join neighbouring glyphs horizontally so a text line becomes one contour
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
@@ -68,10 +117,13 @@ def segment_and_repack(img: Image.Image) -> Image.Image:
     if not boxes:
         raise ValueError("no printable content")
 
-    min_x = min(b[0] for b in boxes)
-    max_x = max(b[0] + b[2] for b in boxes)
-    min_y = min(b[1] for b in boxes)
-    max_y = max(b[1] + b[3] for b in boxes)
+    # Dilation inflates the boxes; take the bounds from the ink itself
+    ink = np.zeros_like(thresh)
+    for x, y, w, h in boxes:
+        ink[y : y + h, x : x + w] = thresh[y : y + h, x : x + w]
+    ys, xs = np.nonzero(ink)
+    min_x, max_x = int(xs.min()), int(xs.max()) + 1
+    min_y, max_y = int(ys.min()), int(ys.max()) + 1
 
     # Y-axis ink profile: rows without ink are gaps between blocks
     y_profile = np.any(thresh[min_y:max_y, min_x:max_x], axis=1)
@@ -101,12 +153,12 @@ def segment_and_repack(img: Image.Image) -> Image.Image:
     strips = [img.crop((min_x, s[0], max_x, s[1])) for s in merged]
     gaps = len(strips) - 1
 
-    # Reserve room for the gaps up front (at most half the safe height) so
-    # strips plus gaps can never spill into the cutter margin
-    min_gap = min(MIN_GAP, (SAFE_HEIGHT // 2) // gaps) if gaps else 0
+    # Reserve room for the gaps up front (at most half the area height) so
+    # strips plus gaps can never spill out of the area
+    min_gap = min(MIN_GAP, (area_h // 2) // gaps) if gaps else 0
     scale = min(
-        SAFE_WIDTH / (max_x - min_x),
-        (SAFE_HEIGHT - min_gap * gaps) / sum(s.height for s in strips),
+        area_w / (max_x - min_x),
+        (area_h - min_gap * gaps) / sum(s.height for s in strips),
         MAX_SCALE,
     )
 
@@ -118,17 +170,51 @@ def segment_and_repack(img: Image.Image) -> Image.Image:
         for s in strips
     ]
 
-    scaled_total_h = sum(s.height for s in scaled_strips)
-    free_h = SAFE_HEIGHT - scaled_total_h
+    free_h = area_h - sum(s.height for s in scaled_strips)
     gap_y = free_h // gaps if gaps else 0
-    cur_y = MARGIN_Y + (free_h - gap_y * gaps) // 2
+    cur_y = area_y + (free_h - gap_y * gaps) // 2
 
-    canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), (255, 255, 255))
     for s in scaled_strips:
-        pos_x = MARGIN_X + (SAFE_WIDTH - s.width) // 2
+        pos_x = area_x if align_left else area_x + (area_w - s.width) // 2
         canvas.paste(s, (pos_x, cur_y))
         cur_y += s.height + gap_y
 
+
+def segment_and_repack(img: Image.Image) -> Image.Image:
+    """Compose the label: QR code (if any) full height at the right edge, rest repacked beside it.
+
+    Raises ValueError when the image has no printable content.
+    """
+    img = flatten_to_rgb(img)
+    if img.height > img.width:
+        img = img.rotate(90, expand=True)
+
+    canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), (255, 255, 255))
+    text_area = (MARGIN_X, MARGIN_Y, SAFE_WIDTH, SAFE_HEIGHT)
+
+    qr_box = find_qr(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY))
+    if qr_box is None:
+        layout_strips(canvas, img, text_area, align_left=False)
+        return canvas
+
+    x, y, w, h = qr_box
+    qr = img.crop((x, y, x + w, y + h))
+    # Blank the QR out so only the text is laid out beside it
+    ImageDraw.Draw(img).rectangle((x, y, x + w, y + h), fill=(255, 255, 255))
+
+    # Square at full safe height, flush right
+    qr_size = SAFE_HEIGHT
+    qr = render_qr(qr, qr_size)
+    qr_x = CANVAS_WIDTH - MARGIN_X - qr_size
+    canvas.paste(qr, (qr_x, MARGIN_Y))
+
+    text_w = qr_x - QR_TEXT_GAP - MARGIN_X
+    try:
+        layout_strips(
+            canvas, img, (MARGIN_X, MARGIN_Y, text_w, SAFE_HEIGHT), align_left=True
+        )
+    except ValueError:
+        pass  # a label that is only a QR code is fine
     return canvas
 
 

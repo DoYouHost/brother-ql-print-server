@@ -32,10 +32,10 @@ Key objectives:
 | **Print Head** | 300 DPI thermal |
 | **Media** | Die-cut labels **DK-11209** (62 × 29 mm, 800 labels/roll) |
 | **Full Canvas (300 DPI)** | `CANVAS_WIDTH = 696 px`, `CANVAS_HEIGHT = 271 px` |
-| **Safe Margins** | `MARGIN_X = 24 px` (~2.0 mm), `MARGIN_Y = 24 px` (~2.0 mm) |
-| **Safe Printable Area** | `SAFE_WIDTH = 648 px`, `SAFE_HEIGHT = 223 px` |
+| **Safe Margins** | `MARGIN_X = 8 px` (~0.7 mm), `MARGIN_Y = 8 px` (~0.7 mm), inside the canvas |
+| **Safe Printable Area** | `SAFE_WIDTH = 680 px`, `SAFE_HEIGHT = 255 px` |
 
-> **Critical constraint:** No content must exceed the `Safe Area`. The `MARGIN_Y = 24 px` margin prevents the electric cutter from clipping label text or graphics.
+> **Critical constraint:** No content must exceed the `Safe Area`. The 696 × 271 canvas is already the driver's full imageable area for 62x29 (Brother's PPD: 4.32 8.4 171.36 73.44 pt), so the physical ~1.5 mm side / ~3 mm top-bottom unprintable strips are not ours to spend; the extra 8 px only absorbs feed registration drift.
 
 ---
 
@@ -58,7 +58,10 @@ Key objectives:
 │     - Slice content into horizontal strips                   │
 │     - Proportional scaling (clamped to max scale 2.0)        │
 │     - Uniform redistribution of vertical gaps (gap_y)        │
-│  4. Composition: Paste strips centered onto 696x271 canvas   │
+│  4. Composition: a QR code (found via cv2.QRCodeDetector) is │
+│     redrawn from its module grid, full safe height, flush    │
+│     right; the remaining text is repacked left of it. Without│
+│     a QR, strips are centered onto the 696x271 canvas        │
 │  5. Cutter Control:                                          │
 │     - cut_at_end: bool (default: True)                       │
 │     - cut_every: int (0 = OFF / 1 = each label / N = every N)│
