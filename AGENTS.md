@@ -128,7 +128,7 @@ Uploads: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unp
 
 ### 5.3 Code Structure
 - `label_printer/` is the package: `config.py` (settings and label tables), `server.py` (image pipeline, job building, printing, FastAPI routes), `announce.py` (Avahi file), `__main__.py` (`python -m label_printer [serve|check|announce]`), `web/` (UI and design tokens). `server.py` is still one module; splitting it into pipeline / printer / api is possible later.
-- Cutting is emitted per label (one raster job each, cut flag from `cut_plan`); how the printer chains uncut labels still needs verifying on hardware.
+- Cutting is emitted per label (one raster job each, cut flag from `cut_plan`); verified on a QL-600 with 6 labels and `cut_every=3`: two strips of three, cut cleanly between labels.
 - Automated tests must run without a printer (synthetic images, a fake `send`). They live in `tests/` and run with `pytest` (dev dependencies: `pytest`, `httpx`).
 
 ---
