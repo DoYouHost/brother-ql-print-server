@@ -94,6 +94,13 @@ Uploads: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unp
 - **`POST /preview`**
   - Form field `files` (same as above).
   - Response: JSON `{labels: [{name, png}], errors: [...]}`, where `png` is a data URL of the exact 696 x 271 layout that would be printed.
+- **`GET /info`**
+  - Identity and capabilities: `{service: "label-printer", version, printer: {model, connected}, label: {width_mm, height_mm, dpi}, limits, accepts}`. `version` is `API_VERSION` (bump on breaking changes).
+- **Discovery (mDNS / DNS-SD)**
+  - The Pi announces `_labelprinter._tcp` on port 8000 through Avahi, with TXT `v`, `path=/info`, `model`, `label`, `dpi`. Install: `sudo install -m 644 deploy/avahi-label-printer.service /etc/avahi/services/label-printer.service` (Avahi reloads by itself). A test keeps the file in step with `server.py`.
+  - Avahi announces whether or not this server is running, so a client must call `GET /info` after resolving and check `printer.connected`. Prefer the resolved IP over `rpi-label-printer.local`; Android does not resolve `.local` names reliably.
+  - mDNS does not cross VLANs or guest Wi-Fi isolation; clients need a manual address fallback.
+  - The API has no authentication: anyone on the LAN can print.
 - **`GET /`**
   - English web UI (`web/index.html`) built on the Bambuddy Design System (tokens in `web/tokens.css`, copied 1:1 from the design system project; Manrope and JetBrains Mono self-hosted in `web/fonts/` so it works offline). Static files are served under `/web`.
   - Flow: choosing files starts the preview automatically (debounced, stale responses ignored); every label has a checkbox (all checked by default, deselections survive a refreshed preview); Print is enabled only for a preview without errors and sends the checked indices as `selected`.

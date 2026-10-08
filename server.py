@@ -45,7 +45,9 @@ MAX_FILE_BYTES = 25 * 1024 * 1024  # per upload and per zip member
 MAX_ZIP_BYTES = 100 * 1024 * 1024  # total unpacked size of one zip
 MAX_ZIP_MEMBERS = 200
 MAX_PIXELS = 20_000_000  # larger bitmaps do not fit the Pi's RAM during preprocessing
-PDF_DPI = 300
+API_VERSION = 1  # bump on a breaking change; advertised over mDNS and in /info
+LABEL_DPI = 300
+PDF_DPI = LABEL_DPI
 LABEL_MM = (62, 29)
 ASPECT_TOLERANCE = 0.15  # how far a source's proportions may stray from the label's before it is refused
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
@@ -506,6 +508,24 @@ def png_data_url(img: Image.Image) -> str:
 # /print request is still in flight. In memory only; an entry lives as long as its request.
 progress: Dict[str, dict] = {}
 print_lock = threading.Lock()  # one job on the printer at a time
+
+
+@app.get("/info")
+async def handle_info():
+    """Identity and capabilities, so a discovered service can be checked before use."""
+    return {
+        "service": "label-printer",
+        "version": API_VERSION,
+        "printer": {"model": MODEL, "connected": os.path.exists(PRINTER_DEVICE)},
+        "label": {"width_mm": LABEL_MM[0], "height_mm": LABEL_MM[1], "dpi": LABEL_DPI},
+        "limits": {
+            "max_copies": MAX_COPIES,
+            "max_labels": MAX_LABELS,
+            "max_prints": MAX_PRINTS,
+            "max_file_mb": MAX_FILE_BYTES // 2**20,
+        },
+        "accepts": list(LABEL_EXTENSIONS) + [".zip"],
+    }
 
 
 @app.get("/progress/{job_id}")

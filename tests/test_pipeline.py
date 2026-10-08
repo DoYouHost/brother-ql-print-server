@@ -409,3 +409,31 @@ def test_a_long_line_does_not_tear_the_text_block_apart():
     # Only the long line is held back by its width; the other lines keep filling the height
     ratios = [h / src for h, src in zip(heights, (25, 21, 35, 53))]
     assert ratios[2] < 0.85 * min(ratios[0], ratios[1], ratios[3])
+
+
+# --- discovery -------------------------------------------------------------------------
+
+def test_info_describes_the_service_and_reflects_the_printer_state(monkeypatch):
+    monkeypatch.setattr(server, "PRINTER_DEVICE", "/dev/null")
+    info = client.get("/info").json()
+    assert info["service"] == "label-printer" and info["version"] == server.API_VERSION
+    assert info["printer"] == {"model": server.MODEL, "connected": True}
+    assert info["label"] == {"width_mm": 62, "height_mm": 29, "dpi": 300}
+    assert info["limits"]["max_copies"] == server.MAX_COPIES and info["limits"]["max_labels"] == server.MAX_LABELS
+    assert {".pdf", ".png", ".jpg", ".zip"} <= set(info["accepts"])
+
+    monkeypatch.setattr(server, "PRINTER_DEVICE", "/nonexistent/lp0")
+    assert client.get("/info").json()["printer"]["connected"] is False
+
+
+def test_the_avahi_announcement_matches_what_the_server_reports():
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    service = ET.parse(Path(server.__file__).parent / "deploy" / "avahi-label-printer.service").getroot().find("service")
+    txt = dict(t.text.split("=", 1) for t in service.findall("txt-record"))
+    assert service.findtext("type") == "_labelprinter._tcp"
+    assert int(service.findtext("port")) == 8000                      # the port the unit file starts uvicorn on
+    assert txt["v"] == str(server.API_VERSION) and txt["path"] == "/info"
+    assert txt["model"] == "QL-600"                                   # the default PRINTER_MODEL
+    assert txt["label"] == f"{server.LABEL_MM[0]}x{server.LABEL_MM[1]}" and int(txt["dpi"]) == server.LABEL_DPI
