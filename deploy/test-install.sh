@@ -23,19 +23,19 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "./$DEB" >/dev/null
 getent passwd label-printer | grep -q ':/usr/sbin/nologin$' || fail "service user missing"
 [ "$(id -gn label-printer)" = lp ] || fail "service user is not in group lp"
 [ -f /etc/default/label-printer ] && [ -f /lib/systemd/system/label-printer.service ] || fail "files missing"
-head -1 /opt/label-printer/venv/bin/label-printer | grep -qx '#!/opt/label-printer/venv/bin/python3' || fail "venv paths not fixed"
-/opt/label-printer/venv/bin/python -m label_printer --version
-/opt/label-printer/venv/bin/python -m label_printer check
+head -1 /opt/label-printer/python/bin/label-printer | grep -qx '#!/opt/label-printer/python/bin/python3' || fail "shebang paths not fixed"
+/opt/label-printer/python/bin/python3 -m label_printer --version
+/opt/label-printer/python/bin/python3 -m label_printer check
 
 step "announcement: install and withdraw"
-/opt/label-printer/venv/bin/python -m label_printer announce install
+/opt/label-printer/python/bin/python3 -m label_printer announce install
 grep -q '<type>_labelprinter._tcp</type>' /etc/avahi/services/label-printer.service || fail "no announcement"
 grep -E 'port|txt-record' /etc/avahi/services/label-printer.service
-/opt/label-printer/venv/bin/python -m label_printer announce remove
+/opt/label-printer/python/bin/python3 -m label_printer announce remove
 [ ! -e /etc/avahi/services/label-printer.service ] || fail "announcement not withdrawn"
 
 step "run as the service user, with the settings read from the environment"
-su -s /bin/sh label-printer -c 'PRINTER_IDENTIFIER=file:///dev/null LABEL_PRINTER_PORT=8123 /opt/label-printer/venv/bin/python -m label_printer' >/tmp/server.log 2>&1 &
+su -s /bin/sh label-printer -c 'PRINTER_IDENTIFIER=file:///dev/null LABEL_PRINTER_PORT=8123 /opt/label-printer/python/bin/python3 -m label_printer' >/tmp/server.log 2>&1 &
 for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8123/info && break; sleep 1; done
 curl -sf http://127.0.0.1:8123/info || { cat /tmp/server.log; fail "server did not answer"; }
 echo
@@ -46,7 +46,7 @@ echo "web page, tokens and fonts served"
 kill %1 2>/dev/null || true
 
 step "a wrong setting stops the service with a message instead of a traceback"
-if PRINTER_LABEL=29x90 /opt/label-printer/venv/bin/python -m label_printer check 2>/tmp/err; then fail "bad label accepted"; fi
+if PRINTER_LABEL=29x90 /opt/label-printer/python/bin/python3 -m label_printer check 2>/tmp/err; then fail "bad label accepted"; fi
 cat /tmp/err
 
 step "remove and purge"

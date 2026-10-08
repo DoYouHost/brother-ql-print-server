@@ -1,0 +1,48 @@
+name: packages
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, image: "debian:13", script: deb.sh}
+          - {runner: ubuntu-24.04-arm, image: "debian:13", script: deb.sh}
+          - {runner: ubuntu-24.04, image: "fedora:latest", script: rpm.sh}
+          - {runner: ubuntu-24.04-arm, image: "fedora:latest", script: rpm.sh}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      # Native runners per architecture: the bundled virtualenv holds compiled wheels
+      - name: Build and smoke-test inside ${{ matrix.image }}
+        run: docker run --rm -v "$PWD":/src -w /src ${{ matrix.image }} sh /src/deploy/ci/${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.script }}-${{ matrix.runner }}
+          path: |
+            dist/*.deb
+            dist/*.rpm
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match the package version
+        run: test "v$(sed -n 's/^__version__ = "\(.*\)"/\1/p' label_printer/__init__.py)" = "$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

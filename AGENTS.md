@@ -156,7 +156,9 @@ pytest
 ```bash
 docker run --rm -v "$PWD":/src:ro debian:13 sh /src/deploy/test-install.sh
 ```
-Releases are plain `.deb` files; bump `__version__` in `label_printer/__init__.py` first.
+`deploy/build-rpm.sh` does the same for Fedora-family systems (`label-printer-<version>-1.<arch>.rpm`, spec in `deploy/rpm/`); both scripts share `deploy/stage.sh`. The rpm is built and import-tested only in containers; running the service on a real Fedora (SELinux, `/etc/default` path) is unverified.
+
+Releases: bump `__version__` in `label_printer/__init__.py`, then push a tag `v<version>`. `.github/workflows/release.yml` builds deb (debian:13) and rpm (fedora:latest) for amd64 and arm64 on native runners (`deploy/ci/*.sh` build, install and import-check each one), then attaches them to a GitHub release. Pull requests run the same builds without releasing.
 
 ### Moving a manual install to the package
 A hand-made install (`~/ql-printer-server`, unit `/etc/systemd/system/label-printer.service`, a copy of the Avahi file) overrides the package's unit of the same name: stop and disable it, delete the unit and `/etc/avahi/services/label-printer.service`, run `sudo systemctl daemon-reload`, then install the package.

@@ -10,9 +10,9 @@ Group=lp
 EnvironmentFile=-/etc/default/label-printer
 # "+" runs these as root, because Avahi reads its service files from a root-owned directory;
 # "-" keeps a failed announcement from stopping the printer from working
-ExecStartPre=-+/opt/label-printer/venv/bin/python -m label_printer announce install
-ExecStart=/opt/label-printer/venv/bin/python -m label_printer
-ExecStopPost=-+/opt/label-printer/venv/bin/python -m label_printer announce remove
+ExecStartPre=-+/opt/label-printer/python/bin/python3 -m label_printer announce install
+ExecStart=/opt/label-printer/python/bin/python3 -m label_printer
+ExecStopPost=-+/opt/label-printer/python/bin/python3 -m label_printer announce remove
 Restart=always
 RestartSec=3
 NoNewPrivileges=yes
