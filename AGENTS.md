@@ -94,6 +94,8 @@ Uploads: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unp
 - **`POST /preview`**
   - Form field `files` (same as above).
   - Response: JSON `{labels: [{name, png}], errors: [...]}`, where `png` is a data URL of the exact 696 x 271 layout that would be printed.
+- **`POST /preview/stream`**
+  - Same input as `/preview`; response is `application/x-ndjson`: `{"total": n}`, then one `{"label": {name, png}}` per label in print order as each finishes, then `{"errors": [...]}`. The web UI uses it (XHR `onprogress`, so upload progress still works) to append tiles and drive a "Processing x of n" bar. Labels are processed on a thread pool (`pool` in `server.py`); a process pool was measured slower and heavier, because OpenCV already uses all four cores per label.
 - **`GET /info`**
   - Identity and capabilities: `{service: "label-printer", version, printer: {model, connected}, label: {id, width_mm, height_mm, dpi}, limits, accepts}`. `version` is `API_VERSION` (bump on breaking changes).
 - **Discovery (mDNS / DNS-SD)**

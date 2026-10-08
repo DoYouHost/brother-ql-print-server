@@ -312,6 +312,7 @@ const state = {
   printing: false,
   notice: null,         // {kind: 'ok' | 'error', text, errors}
   progress: null,       // upload progress 0..1 while the preview request is being sent, else null
+  total: null,          // labels the server will send, known once it has queued them
   printStatus: null,    // while printing: {uploaded 0..1|null, stage: unknown|processing|printing, done, total}
   timer: null, seq: 0, abort: null,
 };
@@ -384,13 +385,16 @@ function drawBar([barId, fillId, textId], pct, text) {
 function renderLoading() {
   const loading = state.phase === 'loading';
   $('loading').hidden = !loading;
-  $('skeleton').hidden = !loading;
+  $('skeleton').hidden = !loading || state.labels.length > 0;
   if (!loading) return;
   const ids = ['progress', 'progressFill', 'loadingText'];
   const n = state.files.length;
   if (state.progress !== null && state.progress < 1) {
     const pct = Math.round(state.progress * 100);
     drawBar(ids, pct, `Uploading ${pct}%`);
+  } else if (state.total) {
+    const done = state.labels.length;
+    drawBar(ids, Math.round((done / state.total) * 100), `Processing ${done} of ${state.total} ${labelsWord(state.total)}`);
   } else {
     drawBar(ids, null, state.progress === null ? 'Preparing…' : `Processing ${n} ${filesWord(n)}…`);
   }
@@ -438,21 +442,28 @@ function renderPreview() {
     );
   }
 
-  $('grid').replaceChildren(...labels.map((label, index) => {
-    const input = h('input', { type: 'checkbox', class: 'sr-only', 'aria-label': `Print ${label.name}` });
-    input.checked = !state.deselected.has(label.name);
-    input.addEventListener('change', () => {
-      if (input.checked) state.deselected.delete(label.name); else state.deselected.add(label.name);
-      renderPreview(); renderPrint();
-    });
-    const box = h('span', { class: 'box' }, svg('M20 6 9 17l-5-5', ''));
-    return h('label', { class: 'tile' },
-      h('img', { src: label.png, alt: label.name }),
-      h('span', { class: 'cap' }, input, box,
-        h('span', { class: 'label', title: label.name }, label.name),
-        h('span', { class: 'pos mono' }, String(index + 1))),
-    );
-  }));
+  // Tiles are only appended while labels stream in; existing ones just resync their checkbox
+  const grid = $('grid');
+  if (grid.children.length > labels.length) grid.replaceChildren();
+  for (let index = grid.children.length; index < labels.length; index++) grid.append(labelTile(labels[index], index));
+  [...grid.children].forEach((tile, index) => {
+    tile.querySelector('input').checked = !state.deselected.has(labels[index].name);
+  });
+}
+
+function labelTile(label, index) {
+  const input = h('input', { type: 'checkbox', class: 'sr-only', 'aria-label': `Print ${label.name}` });
+  input.addEventListener('change', () => {
+    if (input.checked) state.deselected.delete(label.name); else state.deselected.add(label.name);
+    renderPreview(); renderPrint();
+  });
+  const box = h('span', { class: 'box' }, svg('M20 6 9 17l-5-5', ''));
+  return h('label', { class: 'tile' },
+    h('img', { src: label.png, alt: label.name }),
+    h('span', { class: 'cap' }, input, box,
+      h('span', { class: 'label', title: label.name }, label.name),
+      h('span', { class: 'pos mono' }, String(index + 1))),
+  );
 }
 
 function renderPrint() {
@@ -484,7 +495,7 @@ function errorList(errors) {
 
 function filesChanged() {
   clearTimeout(state.timer);
-  state.labels = []; state.errors = []; state.notice = null; state.progress = null;
+  state.labels = []; state.errors = []; state.notice = null; state.progress = null; state.total = null;
   state.phase = state.files.length ? 'loading' : 'idle';
   state.seq++; state.abort?.abort();
   render();
@@ -524,20 +535,52 @@ function request(url, data, { signal, onProgress } = {}) {
   });
 }
 
+// Same upload progress as request(), but the response is newline-delimited JSON handed to onEvent as it arrives
+function stream(url, data, { signal, onProgress, onEvent } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let seen = 0;
+    const drain = (final) => {
+      const end = final ? xhr.responseText.length : xhr.responseText.lastIndexOf('\n') + 1;
+      xhr.responseText.slice(seen, end).split('\n').filter(Boolean).forEach((line) => onEvent(JSON.parse(line)));
+      seen = Math.max(seen, end);
+    };
+    xhr.open('POST', url);
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
+    xhr.upload.onload = () => onProgress?.(1);
+    xhr.onprogress = () => { if (xhr.status === 200) drain(false); };
+    xhr.onload = () => {
+      const ok = xhr.status === 200;
+      if (ok) drain(true);
+      resolve({ ok, status: xhr.status });
+    };
+    xhr.onerror = () => reject(new Error('network error'));
+    xhr.onabort = () => reject(new DOMException('aborted', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort());
+    xhr.send(data);
+  });
+}
+
 async function runPreview() {
   const seq = ++state.seq;
   state.abort = new AbortController();
   try {
     const data = new FormData();
     state.files.forEach((file) => data.append('files', file));
-    const response = await request('/preview', data, {
+    const response = await stream('/preview/stream', data, {
       signal: state.abort.signal,
       onProgress: (p) => { if (seq === state.seq) { state.progress = p; renderLoading(); } },
+      onEvent: (event) => {
+        if (seq !== state.seq) return;
+        if ('total' in event) state.total = event.total;
+        if (event.label) state.labels.push(event.label);
+        if (event.errors) state.errors = event.errors;
+        renderPreview(); renderPrint();
+      },
     });
-    const body = await response.json().catch(() => ({}));
     if (seq !== state.seq) return;
     if (!response.ok) throw new Error('preview failed');
-    state.labels = body.labels; state.errors = body.errors; state.phase = 'ready';
+    state.phase = 'ready';
   } catch (error) {
     if (error.name === 'AbortError' || seq !== state.seq) return;
     state.labels = []; state.errors = []; state.phase = 'failed';

@@ -9,6 +9,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import io
+import json
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -439,3 +440,15 @@ def test_the_avahi_announcement_matches_what_the_server_reports():
     assert txt["v"] == str(info["version"]) and txt["path"] == "/info"
     assert txt["model"] == info["printer"]["model"] and txt["label"] == info["label"]["id"]
     assert int(txt["dpi"]) == info["label"]["dpi"]
+
+
+def test_preview_stream_sends_labels_in_order_then_errors():
+    files = [("files", (f"l{i}.png", png_bytes(1 + i), "image/png")) for i in range(3)]
+    files.append(("files", ("photo.png", png_bytes(1, size=(400, 400)), "image/png")))
+    response = client.post("/preview/stream", files=files)
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert events[0] == {"total": 3}
+    assert [e["label"]["name"] for e in events[1:4]] == ["l0.png", "l1.png", "l2.png"]
+    assert events[1]["label"]["png"].startswith("data:image/png;base64,")
+    assert [e["code"] for e in events[4]["errors"]] == ["wrong_format"]

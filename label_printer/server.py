@@ -6,6 +6,7 @@ printer. Which printer, label and connection is set in config.py.
 
 import base64
 import io
+import json
 import os
 import re
 import threading
@@ -14,10 +15,10 @@ import zlib
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
 from pdf2image import convert_from_bytes, pdfinfo_from_bytes
@@ -305,15 +306,24 @@ class Job:
         """Process a label on the pool; `collect` gathers the results in submission order."""
         self.pending.append((name, pool.submit(work, *args)))
 
-    def collect(self) -> None:
-        for name, future in self.pending:
+    def results(self) -> Iterator[Tuple[str, Image.Image]]:
+        """Yield finished labels in submission order as they complete; failures go to `errors`."""
+        while self.pending:
+            name, future = self.pending.pop(0)
             try:
-                self.labels.append((name, future.result()))
+                label = (name, future.result())
             except NoContentError as exc:
                 self.fail(name, "no_content", str(exc))
+                continue
             except (ValueError, OSError, PDFPageCountError, PDFSyntaxError, Image.DecompressionBombError) as exc:
                 self.fail(name, "unreadable", str(exc))
-        self.pending.clear()
+                continue
+            self.labels.append(label)
+            yield label
+
+    def collect(self) -> None:
+        for _ in self.results():
+            pass
 
     def fail(self, name: str, code: str, detail: str) -> None:
         self.errors.append({"name": name, "code": code, "detail": detail})
@@ -448,7 +458,8 @@ def add_file(job: Job, name: str, content: bytes) -> None:
         job.fail(name, "unsupported", "only PDF, PNG, JPG and ZIP are accepted")
 
 
-def build_job(uploads: List[UploadFile]) -> Job:
+def start_job(uploads: List[UploadFile]) -> Job:
+    """Read and validate the uploads and queue every label; the results are not awaited yet."""
     job = Job()
     for upload in uploads:
         name = PurePosixPath((upload.filename or "file").replace("\\", "/")).name
@@ -461,6 +472,11 @@ def build_job(uploads: List[UploadFile]) -> Job:
             job.fail(name, exc.code, str(exc))
             continue
         add_file(job, name, content)
+    return job
+
+
+def build_job(uploads: List[UploadFile]) -> Job:
+    job = start_job(uploads)
     job.collect()
     return job
 
@@ -634,6 +650,22 @@ def handle_preview(files: List[UploadFile] = File(...)):
         "labels": [{"name": name, "png": png} for (name, _), png in zip(job.labels, encoded)],
         "errors": job.errors,
     }
+
+
+@app.post("/preview/stream")
+def handle_preview_stream(files: List[UploadFile] = File(...)):
+    """Like /preview, but as newline-delimited JSON, so the page can show labels as they finish:
+    `{"total": n}`, then one `{"label": {name, png}}` per label in order, then `{"errors": [...]}`."""
+    job = start_job(files)  # reads the uploads here, before the request's files are closed
+    total = len(job.pending)
+
+    def events() -> Iterator[str]:
+        yield json.dumps({"total": total}) + "\n"
+        for name, img in job.results():
+            yield json.dumps({"label": {"name": name, "png": png_data_url(img)}}) + "\n"
+        yield json.dumps({"errors": job.errors}) + "\n"
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.get("/", response_class=FileResponse)

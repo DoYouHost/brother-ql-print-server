@@ -74,6 +74,19 @@ One job takes any number of files of mixed type, sent as repeated `files` fields
 
 `png` is the exact 696 × 271 px layout that would be printed. The order of `labels` is what `selected` in `/print` refers to.
 
+### `POST /preview/stream`
+
+Same input as `/preview`, but the response is newline-delimited JSON (`application/x-ndjson`), so a client can show labels as they finish. Each line is one object:
+
+```
+{"total": 41}
+{"label": {"name": "label-10.png", "png": "data:image/png;base64,..."}}
+...one line per label, in the order `/print` uses...
+{"errors": [{"name": "photo.jpg", "code": "wrong_format", "detail": "..."}]}
+```
+
+`total` is the number of labels queued (files rejected up front are not counted); `errors` is always the last line. On a Pi Zero 2 W the first label arrives after about 1.5 s and 41 labels after about 9 s.
+
 ### `POST /print`
 
 `multipart/form-data`:
