@@ -1,325 +1,641 @@
 <!doctype html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Drukarka etykiet 62×29</title>
+<title>Label printer 62×29</title>
+<link rel="stylesheet" href="/web/tokens.css">
 <style>
-  :root {
-    --bg: #eceff1; --card: #fff; --text: #212b36; --muted: #637381;
-    --line: #d0d7de; --accent: #0288d1; --accent-dark: #0277bd;
-    --danger: #c62828; --danger-bg: #fdecea; --ok: #2e7d32; --ok-bg: #e8f5e9;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14181c; --card: #1e242a; --text: #e6e9ec; --muted: #9aa5b1;
-      --line: #36404a; --danger-bg: #3b1d1d; --ok-bg: #1b3320;
-    }
-  }
+  /* Layout: control-room readout. Left rail (files, settings, print) stays in
+     view; right column is the preview grid. One column on narrow screens.
+     Colours, type, spacing and radii come from the Bambuddy design system
+     tokens (tokens.css); depth is translucency plus hairlines, never shadows. */
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text);
-         font: 16px/1.4 system-ui, sans-serif; }
-  main { max-width: 820px; margin: 0 auto; }
-  .card { background: var(--card); border-radius: 8px; padding: 24px;
-          box-shadow: 0 4px 10px rgba(0,0,0,.1); margin-bottom: 16px; }
-  h1 { margin: 0 0 4px; font-size: 1.5rem; }
-  h2 { margin: 0 0 12px; font-size: 1.1rem; }
-  .hint { color: var(--muted); font-size: .9rem; margin: 0; }
+  html { background: var(--surface-bg-3); }
+  body {
+    margin: 0; min-height: 100vh; padding: var(--space-9) var(--space-7);
+    background: var(--bg-gradient); background-attachment: fixed;
+    color: var(--text-primary); font-family: var(--font-ui);
+    font-size: var(--text-body-size); font-weight: 500; line-height: 1.4;
+  }
+  [hidden] { display: none !important; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .shell { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-8); }
 
-  .drop { display: block; margin-top: 16px; padding: 28px 16px; text-align: center;
-          border: 2px dashed var(--line); border-radius: 8px; cursor: pointer; }
-  .drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent); }
-  .drop strong { color: var(--accent); }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  header { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-3) var(--space-7); }
+  h1 { margin: 0; font-size: var(--text-screen-title-size); font-weight: var(--text-screen-title-weight);
+       letter-spacing: var(--text-screen-title-tracking); }
+  header .spec { color: var(--text-tertiary); font-size: var(--text-secondary-size); }
+  h2 { margin: 0; font-size: var(--text-title-size); font-weight: var(--text-title-weight); }
 
-  ul.files { list-style: none; margin: 12px 0 0; padding: 0; }
-  ul.files li { display: flex; align-items: center; gap: 8px; padding: 6px 0;
-                border-bottom: 1px solid var(--line); }
-  ul.files .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  ul.files .size { color: var(--muted); font-size: .85rem; }
-  .icon-btn { border: 0; background: none; color: var(--muted); font-size: 1.2rem;
-              cursor: pointer; padding: 0 6px; }
+  .layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: var(--space-8); align-items: start; }
+  .rail { display: flex; flex-direction: column; gap: var(--space-8); position: sticky; top: var(--space-8); }
+  /* Narrow screens: files, settings, print, then the (long) preview, so Print needs no scrolling past it */
+  @media (max-width: 860px) {
+    .layout { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-8); }
+    .rail { display: contents; }
+    .c-files { order: 1; } .c-settings { order: 2; } .c-print { order: 3; } .c-preview { order: 4; }
+  }
+
+  .card { background: var(--card-gradient); border: var(--border-hairline); border-radius: var(--radius-md);
+          padding: var(--space-8); display: flex; flex-direction: column; gap: var(--space-7); min-width: 0; }
+  .subcard { background: var(--surface-subcard); border: 1px solid var(--border-subcard);
+             border-radius: var(--radius-sm); padding: var(--space-7); }
+  .groupcard { background: var(--surface-groupcard); border: 1px solid var(--border-groupcard);
+               border-radius: var(--radius-sm); padding: var(--space-6); }
+  .row { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+  .grow { flex: 1 1 auto; min-width: 0; }
+  .secondary { color: var(--text-secondary); font-size: var(--text-secondary-size); font-weight: var(--text-secondary-weight); }
+  .caption { color: var(--text-tertiary); font-size: var(--text-caption-size); font-weight: var(--text-caption-weight); }
+
+  /* Buttons: filled / tonal / text, per the design system */
+  .btn { font: inherit; font-weight: 700; font-size: 14px; border-radius: var(--radius-sm);
+         padding: 14px 20px; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3);
+         border: 1px solid transparent; cursor: pointer; color: var(--text-primary); background: transparent;
+         transition: filter var(--duration-fast) var(--ease-standard), opacity var(--duration-fast); }
+  .btn:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.sm { font-size: 13px; padding: 9px 16px; }
+  .btn.filled { background: var(--accent-green); color: var(--on-accent-fill); }
+  .btn.tonal { background: var(--surface-subcard); border-color: var(--border-subcard); }
+  .btn.text { color: var(--accent-green-ink); }
+  .btn.wide { width: 100%; }
+  .icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  :focus-visible { outline: 2px solid var(--accent-green); outline-offset: 2px; }
+
+  /* Pill: tinted capsule */
+  .pill { --tint: var(--accent-green); display: inline-flex; align-items: center; gap: var(--space-2);
+          padding: 6px 12px; border-radius: var(--radius-lg); font-size: var(--text-pill-size);
+          font-weight: var(--text-pill-weight); letter-spacing: var(--text-pill-tracking); color: var(--tint);
+          background: color-mix(in srgb, var(--tint) 16%, transparent);
+          border: 1px solid color-mix(in srgb, var(--tint) 40%, transparent); white-space: nowrap; }
+  .pill.danger { --tint: var(--danger); }
+  .pill.muted { --tint: var(--text-secondary); }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tint); }
+
+  /* Drop zone */
+  .drop { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); text-align: center;
+          padding: var(--space-9) var(--space-7); cursor: pointer; border: 1px dashed var(--dotted-rule);
+          background: var(--surface-subcard); border-radius: var(--radius-sm);
+          transition: border-color var(--duration-normal) var(--ease-standard), background var(--duration-normal) var(--ease-standard); }
+  .drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent-green);
+          background: color-mix(in srgb, var(--accent-green) 8%, transparent); }
+  .drop .icon { width: 32px; height: 32px; color: var(--text-tertiary); }
+  .drop strong { color: var(--accent-green-ink); font-weight: 700; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  ul.files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  ul.files li { display: flex; align-items: center; gap: var(--space-5); padding: var(--space-3) 0;
+                border-top: 1px solid var(--hairline); }
+  ul.files li:first-child { border-top: 0; }
+  ul.files .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   font-size: 13px; font-weight: 600; }
+  ul.files .size { color: var(--text-tertiary); font-size: var(--text-caption-size); white-space: nowrap; }
+  .icon-btn { border: 0; background: none; color: var(--text-secondary); cursor: pointer; padding: var(--space-1);
+              border-radius: var(--radius-pill); display: inline-flex; }
   .icon-btn:hover { color: var(--danger); }
 
-  .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
-  label.field { display: block; font-size: .9rem; }
-  label.field input, label.field select { width: 100%; margin-top: 4px; padding: 8px; font: inherit;
-        color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 4px; }
-  .check { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  /* Fields: subcard fill, hairline border, green on focus */
+  .field { display: flex; flex-direction: column; gap: var(--space-2); }
+  .field > span { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .field:focus-within > span { color: var(--accent-green-ink); }
+  .control { position: relative; display: flex; align-items: center; background: var(--surface-subcard);
+             border: 1.5px solid var(--border-subcard); border-radius: var(--radius-sm); }
+  .control:focus-within { border-color: var(--accent-green); }
+  .control input, .control select { width: 100%; font: inherit; font-size: 14px; font-weight: 600; color: var(--text-primary);
+             background: transparent; border: 0; outline: 0; padding: 9px 13px; appearance: none; -moz-appearance: textfield; }
+  .control select { padding-right: 40px; cursor: pointer; }
+  .control select option { background: var(--overlay-surface); color: var(--text-primary); }
+  .control .chev { position: absolute; right: 12px; pointer-events: none; color: var(--text-secondary); }
+  .control input[type=number]::-webkit-inner-spin-button { display: none; }
+  .stepper { display: flex; gap: var(--space-1); padding-right: var(--space-2); }
+  .stepper button { border: 0; background: var(--surface-subcard); color: var(--text-primary); width: 30px; height: 30px;
+                    border-radius: var(--radius-pill); cursor: pointer; font: inherit; font-weight: 700; font-size: 16px; }
+  .stepper button:hover { filter: brightness(1.2); }
 
-  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
-  button.primary, button.secondary { padding: 10px 20px; font: inherit; font-weight: 600;
-        border-radius: 4px; cursor: pointer; border: 1px solid var(--accent); }
-  button.primary { background: var(--accent); color: #fff; }
-  button.primary:hover:not(:disabled) { background: var(--accent-dark); }
-  button.secondary { background: none; color: var(--accent); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .summary { color: var(--muted); }
+  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-7); }
+  .switch { width: 44px; height: 26px; border-radius: var(--radius-pill); padding: 3px; border: 0; cursor: pointer; flex: none;
+            background: var(--surface-subcard); display: flex; align-items: center; justify-content: flex-start;
+            transition: background var(--duration-normal) var(--ease-standard); }
+  .switch::after { content: ""; width: 20px; height: 20px; border-radius: 50%; background: var(--text-secondary);
+                   transition: transform var(--duration-normal) var(--ease-standard), background var(--duration-normal) var(--ease-standard); }
+  .switch[aria-checked=true] { background: color-mix(in srgb, var(--accent-green) 40%, transparent); }
+  .switch[aria-checked=true]::after { background: var(--accent-green); transform: translateX(18px); }
 
-  .notice { margin-top: 16px; padding: 10px 14px; border-radius: 4px; }
-  .notice.error { background: var(--danger-bg); color: var(--danger); }
-  .notice.ok { background: var(--ok-bg); color: var(--ok); }
-  .notice ul { margin: 6px 0 0; padding-left: 20px; }
+  /* Print readout */
+  .stat { display: flex; align-items: baseline; gap: var(--space-5); }
+  .stat .value { font-family: var(--text-stat-value-font); font-size: var(--text-stat-value-size);
+                 font-weight: var(--text-stat-value-weight); line-height: 1; letter-spacing: -1px; }
+  .notice { display: flex; flex-direction: column; gap: var(--space-3); }
+  .notice ul { margin: 0; padding-left: var(--space-8); font-size: 13px; }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
-  figure { margin: 0; }
-  figure img { display: block; width: 100%; height: auto; aspect-ratio: 696 / 271; border: 1px solid var(--line);
-               border-radius: 6px; background: #fff; }
-  figcaption { margin-top: 4px; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
-  [hidden] { display: none !important; }
+  /* Preview */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-5); }
+  .tile { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); cursor: pointer;
+          background: var(--surface-subcard); border: 1px solid var(--border-subcard); border-radius: var(--radius-sm);
+          transition: opacity var(--duration-normal) var(--ease-standard), border-color var(--duration-normal) var(--ease-standard); }
+  .tile:hover { border-color: var(--border-card); }
+  .tile img { display: block; width: 100%; max-width: 100%; height: auto; aspect-ratio: 696 / 271; background: #fff;
+              border-radius: var(--space-3); transition: opacity var(--duration-normal) var(--ease-standard); }
+  .tile .cap { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-1) var(--space-1); min-width: 0; }
+  .tile .label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-secondary-size); font-weight: 600;
+                 display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .tile .pos { color: var(--text-tertiary); font-size: var(--text-caption-size); }
+  .tile:has(input:not(:checked)) img { opacity: .3; }
+  .tile:has(input:not(:checked)) .label { color: var(--text-tertiary); }
+  .tile:has(input:focus-visible) { outline: 2px solid var(--accent-green); outline-offset: 2px; }
+  .box { width: 20px; height: 20px; border-radius: 4px; flex: none; display: flex; align-items: center; justify-content: center;
+         border: 1.5px solid var(--text-secondary); }
+  .box svg { width: 12px; height: 12px; stroke: var(--on-accent-fill); stroke-width: 3; fill: none; stroke-linecap: round;
+             stroke-linejoin: round; opacity: 0; }
+  input:checked + .box { background: var(--accent-green); border-color: transparent; }
+  input:checked + .box svg { opacity: 1; }
+
+  .empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-5); padding: var(--space-10) var(--space-7);
+           text-align: center; }
+  .empty .icon { width: 48px; height: 48px; color: var(--text-tertiary); }
+  .empty p { margin: 0; max-width: 300px; color: var(--text-secondary); font-size: 14px; }
+  .progress { height: 8px; border-radius: 4px; background: var(--gauge-track); overflow: hidden; }
+  .progress i { display: block; height: 100%; width: 35%; border-radius: 4px; background: var(--accent-green);
+                animation: slide 1.2s var(--ease-standard) infinite; }
+  .skeleton { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-5); }
+  .skel { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3);
+          background: var(--surface-subcard); border: 1px solid var(--border-subcard); border-radius: var(--radius-sm); }
+  .skel i { display: block; aspect-ratio: 696 / 271; border-radius: var(--space-3); background: var(--gauge-track); }
+  .skel b { display: block; height: 12px; width: 60%; margin: var(--space-1); border-radius: 6px; background: var(--gauge-track); }
+  @media (prefers-reduced-motion: no-preference) { .skel { animation: pulse 1.4s ease-in-out infinite; } }
+  @keyframes pulse { 50% { opacity: .5; } }
+  .loading { display: flex; flex-direction: column; gap: var(--space-3); }
+  .loading p { margin: 0; }
+  .progress.determinate i { animation: none; transition: width var(--duration-normal) var(--ease-standard); }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  @media (prefers-reduced-motion: reduce) { .progress:not(.determinate) i { animation: none; width: 100%; opacity: .5; } }
+
+  dialog { border: 1px solid var(--overlay-border); background: var(--overlay-surface); color: var(--text-primary);
+           border-radius: var(--radius-lg); padding: var(--space-9); width: min(420px, calc(100vw - 32px)); }
+  dialog::backdrop { background: #000a; }
+  dialog h2 { margin-bottom: var(--space-3); }
+  dialog p { margin: 0 0 var(--space-9); color: var(--text-secondary); font-size: 14px; }
+  dialog .row { justify-content: flex-end; }
 </style>
 </head>
 <body>
-<main>
-  <section class="card">
-    <h1>Drukarka etykiet 62×29</h1>
-    <p class="hint">PDF, PNG, JPG lub ZIP z wieloma plikami. Każda strona PDF to osobna etykieta.</p>
+<div class="shell">
+  <header>
+    <h1>Label printer</h1>
+    <span class="spec mono">DK-11209 · 62 × 29 mm</span>
+  </header>
 
-    <label class="drop" id="drop">
-      <input class="sr-only" type="file" id="picker" multiple
-             accept=".pdf,.png,.jpg,.jpeg,.zip,application/pdf,image/png,image/jpeg,application/zip">
-      <strong>Wybierz pliki</strong> lub przeciągnij je tutaj
-    </label>
-    <ul class="files" id="fileList"></ul>
-  </section>
+  <div class="layout">
+    <aside class="rail">
+      <section class="card c-files" aria-labelledby="h-files">
+        <h2 id="h-files">Files</h2>
+        <label class="drop" id="drop">
+          <input class="sr-only" type="file" id="picker" multiple
+                 accept=".pdf,.png,.jpg,.jpeg,.zip,application/pdf,image/png,image/jpeg,application/zip">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+          <span><strong>Choose files</strong> or drop them here</span>
+          <span class="caption">PDF, PNG, JPG, ZIP · 62 × 29 mm label, one PDF page is one label</span>
+        </label>
+        <ul class="files" id="fileList"></ul>
+        <div class="loading" id="loading" hidden>
+          <div class="progress" id="progress" role="progressbar" aria-label="Preview progress" aria-valuemin="0" aria-valuemax="100"><i id="progressFill"></i></div>
+          <p class="secondary" id="loadingText"></p>
+        </div>
+      </section>
 
-  <section class="card">
-    <h2>Ustawienia wydruku</h2>
-    <div class="options">
-      <label class="field">Liczba kopii każdej etykiety (1–50)
-        <input type="number" id="copies" value="1" min="1" max="50">
-      </label>
-      <label class="field">Cięcie między etykietami
-        <select id="cutEvery">
-          <option value="0" selected>Wyłączone (jeden ciągły pasek)</option>
-          <option value="1">Po każdej etykiecie</option>
-          <option value="2">Co 2 etykiety</option>
-          <option value="3">Co 3 etykiety</option>
-          <option value="4">Co 4 etykiety</option>
-          <option value="5">Co 5 etykiet</option>
-          <option value="10">Co 10 etykiet</option>
-        </select>
-      </label>
-    </div>
-    <label class="check"><input type="checkbox" id="cutAtEnd" checked> Odetnij na końcu zadania</label>
+      <section class="card c-settings" aria-labelledby="h-settings">
+        <h2 id="h-settings">Settings</h2>
+        <label class="field">
+          <span>Copies of each label</span>
+          <div class="control">
+            <input class="mono" type="number" id="copies" value="1" min="1" max="50" inputmode="numeric">
+            <div class="stepper">
+              <button type="button" id="copiesDown" aria-label="Fewer copies">−</button>
+              <button type="button" id="copiesUp" aria-label="More copies">+</button>
+            </div>
+          </div>
+        </label>
+        <label class="field">
+          <span>Cut between labels</span>
+          <div class="control">
+            <select id="cutEvery">
+              <option value="0" selected>Off — one continuous strip</option>
+              <option value="1">After every label</option>
+              <option value="2">Every 2 labels</option>
+              <option value="3">Every 3 labels</option>
+              <option value="4">Every 4 labels</option>
+              <option value="5">Every 5 labels</option>
+              <option value="10">Every 10 labels</option>
+            </select>
+            <svg class="icon chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </label>
+        <div class="switch-row">
+          <span id="cutEndLabel">Cut at the end of the job</span>
+          <button class="switch" id="cutAtEnd" type="button" role="switch" aria-checked="true" aria-labelledby="cutEndLabel"></button>
+        </div>
+      </section>
 
-    <div class="actions">
-      <button class="secondary" id="previewBtn" disabled>Podgląd</button>
-      <button class="primary" id="printBtn" disabled>Drukuj</button>
-      <span class="summary" id="summary"></span>
-    </div>
-    <div id="notice" hidden></div>
-  </section>
+      <section class="card c-print" aria-labelledby="h-print">
+        <h2 id="h-print">Print</h2>
+        <div class="subcard">
+          <div class="stat"><span class="value" id="total">0</span><span class="secondary" id="totalUnit">labels</span></div>
+          <div class="caption mono" id="totalNote">none selected</div>
+        </div>
+        <button class="btn filled wide" id="printBtn" type="button" disabled>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z"/></svg>
+          <span id="printLabel">Print</span>
+        </button>
+        <div class="loading" id="printLoading" hidden>
+          <div class="progress" id="printProgress" role="progressbar" aria-label="Print progress" aria-valuemin="0" aria-valuemax="100"><i id="printProgressFill"></i></div>
+          <p class="secondary" id="printLoadingText"></p>
+        </div>
+        <div class="notice" id="notice" role="status" hidden></div>
+      </section>
+    </aside>
 
-  <section class="card" id="previewCard" hidden>
-    <h2>Podgląd</h2>
-    <div class="grid" id="grid"></div>
-  </section>
-</main>
+    <section class="card c-preview" aria-labelledby="h-preview">
+      <div class="row">
+        <h2 class="grow" id="h-preview">Preview</h2>
+        <span class="pill muted mono" id="selectionPill" hidden></span>
+        <button class="btn tonal sm" id="selectAll" type="button" hidden>Select all</button>
+        <button class="btn tonal sm" id="selectNone" type="button" hidden>Select none</button>
+      </div>
+      <div id="errors" class="groupcard notice" hidden></div>
+      <div class="skeleton" id="skeleton" aria-hidden="true" hidden>
+        <div class="skel"><i></i><b></b></div><div class="skel"><i></i><b></b></div><div class="skel"><i></i><b></b></div>
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"/></svg>
+        <p>No labels — add files and the preview appears by itself.</p>
+      </div>
+    </section>
+  </div>
+</div>
+
+<dialog id="confirm">
+  <h2 id="confirmTitle"></h2>
+  <p>This cannot be undone.</p>
+  <div class="row">
+    <button class="btn text" id="confirmNo" type="button">Cancel</button>
+    <button class="btn filled" id="confirmYes" type="button">Print</button>
+  </div>
+</dialog>
 
 <script>
 const ACCEPT = /\.(pdf|png|jpe?g|zip)$/i;
+const MAX_COPIES = 50;
+const PREVIEW_DELAY_MS = 300;
 const $ = (id) => document.getElementById(id);
-const els = {
-  drop: $('drop'), picker: $('picker'), fileList: $('fileList'), copies: $('copies'),
-  cutEvery: $('cutEvery'), cutAtEnd: $('cutAtEnd'), previewBtn: $('previewBtn'),
-  printBtn: $('printBtn'), summary: $('summary'), notice: $('notice'),
-  previewCard: $('previewCard'), grid: $('grid'),
-};
 
-// Server error codes -> Polish messages
+// Server error codes -> messages
 const ERRORS = {
-  no_content: 'brak treści do wydruku',
-  unreadable: 'nie można odczytać pliku',
-  too_large: 'plik jest za duży',
-  too_many: 'za dużo etykiet w jednym zadaniu',
-  unsupported: 'nieobsługiwany typ pliku (tylko PDF, PNG, JPG, ZIP)',
-  zip_unreadable: 'nie można otworzyć archiwum ZIP',
-  zip_limits: 'archiwum ZIP przekracza limity',
-  password: 'plik zabezpieczony hasłem',
+  no_content: 'nothing to print',
+  unreadable: 'file cannot be read',
+  too_large: 'file is too large',
+  too_many: 'too many labels in one job',
+  unsupported: 'unsupported file type (PDF, PNG, JPG, ZIP only)',
+  wrong_format: 'format does not match a 62 × 29 mm label',
+  zip_unreadable: 'ZIP archive cannot be opened',
+  zip_limits: 'ZIP archive exceeds the limits',
+  password: 'file is password protected',
 };
 
-let files = [];          // File objects chosen so far
-let previewLabels = 0;   // labels in the last clean preview; 0 = print not allowed
+const state = {
+  files: [],            // File objects
+  labels: [],           // [{name, png}] in the order the server will print them
+  errors: [],           // [{name, code, detail}]
+  deselected: new Set(),// label names the user unchecked; survives a refreshed preview
+  phase: 'idle',        // idle | loading | ready | failed
+  printing: false,
+  notice: null,         // {kind: 'ok' | 'error', text, errors}
+  progress: null,       // upload progress 0..1 while the preview request is being sent, else null
+  printStatus: null,    // while printing: {uploaded 0..1|null, stage: unknown|processing|printing, done, total}
+  timer: null, seq: 0, abort: null,
+};
 
-function plural(n, one, few, many) {
-  const last = n % 10, tens = n % 100;
-  if (n === 1) return one;
-  return last >= 2 && last <= 4 && !(tens >= 12 && tens <= 14) ? few : many;
-}
+const plural = (n, one, many) => (n === 1 ? one : many);
+const labelsWord = (n) => plural(n, 'label', 'labels');
+const filesWord = (n) => plural(n, 'file', 'files');
+const copiesWord = (n) => plural(n, 'copy', 'copies');
 
 function formatSize(bytes) {
-  return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
-                         : (bytes / 1048576).toFixed(1) + ' MB';
+  return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB' : (bytes / 1048576).toFixed(1) + ' MB';
 }
 
-function showNotice(kind, html) {
-  els.notice.className = 'notice ' + kind;
-  els.notice.innerHTML = html;
-  els.notice.hidden = false;
+function h(tag, props = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'class') el.className = value;
+    else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
+    else el.setAttribute(key, value);
+  }
+  el.append(...children);
+  return el;
 }
 
-function hideNotice() { els.notice.hidden = true; }
+const svg = (path, cls = 'icon') => {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  el.setAttribute('viewBox', '0 0 24 24');
+  if (cls) el.setAttribute('class', cls);
+  el.setAttribute('aria-hidden', 'true');
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', path);
+  el.append(p);
+  return el;
+};
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+function copies() {
+  const n = parseInt($('copies').value, 10);
+  return Number.isFinite(n) ? Math.min(MAX_COPIES, Math.max(1, n)) : 1;
 }
 
-function copiesValue() {
-  const n = parseInt(els.copies.value, 10);
-  return Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1;
-}
+const isCutAtEnd = () => $('cutAtEnd').getAttribute('aria-checked') === 'true';
+const selectedIndices = () => state.labels.flatMap((l, i) => (state.deselected.has(l.name) ? [] : [i]));
+const canPrint = () => state.phase === 'ready' && !state.errors.length && !state.printing && selectedIndices().length > 0;
 
-function updateSummary() {
-  if (!previewLabels) { els.summary.textContent = ''; return; }
-  const copies = copiesValue();
-  els.summary.textContent =
-    `${previewLabels} ${plural(previewLabels, 'etykieta', 'etykiety', 'etykiet')} × ` +
-    `${copies} ${plural(copies, 'kopia', 'kopie', 'kopii')} = ${previewLabels * copies}`;
-}
-
-// A changed file list makes the preview stale, so printing is locked until it is refreshed
-function invalidatePreview() {
-  previewLabels = 0;
-  els.printBtn.disabled = true;
-  els.previewCard.hidden = true;
-  els.grid.replaceChildren();
-  updateSummary();
+function render() {
+  renderFiles();
+  renderPreview();
+  renderPrint();
 }
 
 function renderFiles() {
-  els.fileList.replaceChildren(...files.map((file, index) => {
-    const li = document.createElement('li');
-    li.innerHTML = '<span class="name"></span><span class="size"></span>' +
-                   '<button class="icon-btn" type="button" aria-label="Usuń plik">✕</button>';
-    li.querySelector('.name').textContent = file.name;
-    li.querySelector('.size').textContent = formatSize(file.size);
-    li.querySelector('button').addEventListener('click', () => {
-      files.splice(index, 1);
-      filesChanged();
+  $('fileList').replaceChildren(...state.files.map((file, index) => h('li', {},
+    h('span', { class: 'name', title: file.name }, file.name),
+    h('span', { class: 'size mono' }, formatSize(file.size)),
+    h('button', { class: 'icon-btn', type: 'button', 'aria-label': `Remove ${file.name}`,
+                  onclick: () => { state.files.splice(index, 1); filesChanged(); } },
+      svg('M6 6l12 12M18 6 6 18')),
+  )));
+}
+
+// Fills a progress bar: a number for a determinate bar, null for the sliding one
+function drawBar([barId, fillId, textId], pct, text) {
+  const bar = $(barId);
+  bar.classList.toggle('determinate', pct !== null);
+  $(fillId).style.width = pct === null ? '' : pct + '%';
+  if (pct === null) bar.removeAttribute('aria-valuenow'); else bar.setAttribute('aria-valuenow', String(pct));
+  $(textId).textContent = text;
+}
+
+function renderLoading() {
+  const loading = state.phase === 'loading';
+  $('loading').hidden = !loading;
+  $('skeleton').hidden = !loading;
+  if (!loading) return;
+  const ids = ['progress', 'progressFill', 'loadingText'];
+  const n = state.files.length;
+  if (state.progress !== null && state.progress < 1) {
+    const pct = Math.round(state.progress * 100);
+    drawBar(ids, pct, `Uploading ${pct}%`);
+  } else {
+    drawBar(ids, null, state.progress === null ? 'Preparing…' : `Processing ${n} ${filesWord(n)}…`);
+  }
+}
+
+function renderPrintProgress() {
+  const status = state.printStatus;
+  $('printLoading').hidden = !status;
+  if (!status) return;
+  const ids = ['printProgress', 'printProgressFill', 'printLoadingText'];
+  if (status.stage === 'printing' && status.total) {
+    drawBar(ids, Math.round((status.done / status.total) * 100), `Printing ${status.done} of ${status.total}`);
+  } else if (status.uploaded !== null && status.uploaded < 1) {
+    const pct = Math.round(status.uploaded * 100);
+    drawBar(ids, pct, `Uploading ${pct}%`);
+  } else {
+    drawBar(ids, null, status.uploaded === null ? 'Preparing…' : 'Processing…');
+  }
+}
+
+function renderPreview() {
+  const { phase, labels, errors } = state;
+  const picked = selectedIndices().length;
+
+  renderLoading();
+  $('empty').hidden = !(phase === 'idle' || phase === 'failed');
+  $('empty').querySelector('p').textContent = phase === 'failed'
+    ? "Couldn't generate the preview — try again." : 'No labels — add files and the preview appears by itself.';
+
+  const pill = $('selectionPill');
+  pill.hidden = !labels.length;
+  pill.replaceChildren(h('span', { class: 'dot' }), `${picked} / ${labels.length}`);
+  pill.className = 'pill mono ' + (picked ? '' : 'muted');
+  $('selectAll').hidden = $('selectNone').hidden = !labels.length;
+  $('selectAll').disabled = picked === labels.length;
+  $('selectNone').disabled = picked === 0;
+
+  const errorsBox = $('errors');
+  errorsBox.hidden = !errors.length;
+  if (errors.length) {
+    errorsBox.replaceChildren(
+      h('div', {}, h('span', { class: 'pill danger' }, h('span', { class: 'dot' }),
+        `${errors.length} ${plural(errors.length, 'error', 'errors')} — printing blocked`)),
+      errorList(errors),
+    );
+  }
+
+  $('grid').replaceChildren(...labels.map((label, index) => {
+    const input = h('input', { type: 'checkbox', class: 'sr-only', 'aria-label': `Print ${label.name}` });
+    input.checked = !state.deselected.has(label.name);
+    input.addEventListener('change', () => {
+      if (input.checked) state.deselected.delete(label.name); else state.deselected.add(label.name);
+      renderPreview(); renderPrint();
     });
-    return li;
+    const box = h('span', { class: 'box' }, svg('M20 6 9 17l-5-5', ''));
+    return h('label', { class: 'tile' },
+      h('img', { src: label.png, alt: label.name }),
+      h('span', { class: 'cap' }, input, box,
+        h('span', { class: 'label', title: label.name }, label.name),
+        h('span', { class: 'pos mono' }, String(index + 1))),
+    );
   }));
 }
 
+function renderPrint() {
+  const picked = selectedIndices().length;
+  const n = copies();
+  $('total').textContent = String(picked * n);
+  $('totalUnit').textContent = labelsWord(picked * n);
+  $('totalNote').textContent = picked
+    ? `${picked} ${labelsWord(picked)} × ${n} ${copiesWord(n)}` : 'none selected';
+  $('printBtn').disabled = !canPrint();
+  $('printLabel').textContent = state.printing ? 'Printing…' : 'Print';
+  renderPrintProgress();
+
+  const box = $('notice');
+  box.hidden = !state.notice;
+  if (state.notice) {
+    const { kind, text, errors } = state.notice;
+    box.replaceChildren(
+      h('div', {}, h('span', { class: 'pill ' + (kind === 'ok' ? '' : 'danger') }, h('span', { class: 'dot' }), text)),
+      ...(errors && errors.length ? [errorList(errors)] : []),
+    );
+  }
+}
+
+function errorList(errors) {
+  return h('ul', {}, ...errors.map((e) => h('li', {},
+    h('strong', {}, e.name), `: ${ERRORS[e.code] || e.detail}${e.code === 'wrong_format' ? ` (${e.detail})` : ''}`)));
+}
+
 function filesChanged() {
-  renderFiles();
-  invalidatePreview();
-  hideNotice();
-  els.previewBtn.disabled = files.length === 0;
+  clearTimeout(state.timer);
+  state.labels = []; state.errors = []; state.notice = null; state.progress = null;
+  state.phase = state.files.length ? 'loading' : 'idle';
+  state.seq++; state.abort?.abort();
+  render();
+  if (state.files.length) state.timer = setTimeout(runPreview, PREVIEW_DELAY_MS);
 }
 
 function addFiles(list) {
   const rejected = [];
   for (const file of list) {
     if (!ACCEPT.test(file.name)) rejected.push(file.name);
-    else if (!files.some((f) => f.name === file.name && f.size === file.size)) files.push(file);
+    else if (!state.files.some((f) => f.name === file.name && f.size === file.size)) state.files.push(file);
   }
   filesChanged();
   if (rejected.length) {
-    showNotice('error', 'Pominięto nieobsługiwane pliki: ' + rejected.map(escapeHtml).join(', '));
+    state.notice = { kind: 'error', text: 'Skipped unsupported files', errors: rejected.map((name) => ({ name, code: 'unsupported' })) };
+    renderPrint();
   }
 }
 
-function formData() {
-  const data = new FormData();
-  files.forEach((file) => data.append('files', file));
-  data.append('copies', copiesValue());
-  data.append('cut_every', els.cutEvery.value);
-  data.append('cut_at_end', els.cutAtEnd.checked ? 'true' : 'false');
-  return data;
+// XMLHttpRequest instead of fetch: it is the only API that reports upload progress
+function request(url, data, { signal, onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.responseType = 'json';
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
+    xhr.upload.onload = () => onProgress?.(1);   // everything sent, the server is working now
+    xhr.onload = () => resolve({
+      ok: xhr.status >= 200 && xhr.status < 300,
+      status: xhr.status,
+      json: async () => xhr.response ?? {},
+    });
+    xhr.onerror = () => reject(new Error('network error'));
+    xhr.onabort = () => reject(new DOMException('aborted', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort());
+    xhr.send(data);
+  });
 }
 
-function errorList(errors) {
-  return '<ul>' + errors.map((e) =>
-    `<li><strong>${escapeHtml(e.name)}</strong>: ${escapeHtml(ERRORS[e.code] || e.detail)}</li>`
-  ).join('') + '</ul>';
-}
-
-async function readJson(response) {
-  try { return await response.json(); } catch { return {}; }
-}
-
-async function preview() {
-  hideNotice();
-  invalidatePreview();
-  els.previewBtn.disabled = true;
-  els.summary.textContent = 'Przetwarzanie…';
+async function runPreview() {
+  const seq = ++state.seq;
+  state.abort = new AbortController();
   try {
-    const response = await fetch('/preview', { method: 'POST', body: formData() });
-    const body = await readJson(response);
-    if (!response.ok) {
-      showNotice('error', 'Nie udało się wygenerować podglądu.');
-      return;
-    }
-    els.grid.replaceChildren(...body.labels.map((label) => {
-      const figure = document.createElement('figure');
-      const img = document.createElement('img');
-      img.src = label.png;
-      img.alt = label.name;
-      const caption = document.createElement('figcaption');
-      caption.textContent = caption.title = label.name;
-      figure.append(img, caption);
-      return figure;
-    }));
-    els.previewCard.hidden = body.labels.length === 0;
-    if (body.errors.length) {
-      showNotice('error', 'Wydruk zablokowany, dopóki są błędy. Usuń wadliwe pliki lub popraw archiwum:' +
-                          errorList(body.errors));
-    } else {
-      previewLabels = body.labels.length;
-      els.printBtn.disabled = previewLabels === 0;
-    }
-  } catch {
-    showNotice('error', 'Brak połączenia z serwerem.');
-  } finally {
-    els.previewBtn.disabled = files.length === 0;
-    updateSummary();
+    const data = new FormData();
+    state.files.forEach((file) => data.append('files', file));
+    const response = await request('/preview', data, {
+      signal: state.abort.signal,
+      onProgress: (p) => { if (seq === state.seq) { state.progress = p; renderLoading(); } },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (seq !== state.seq) return;
+    if (!response.ok) throw new Error('preview failed');
+    state.labels = body.labels; state.errors = body.errors; state.phase = 'ready';
+  } catch (error) {
+    if (error.name === 'AbortError' || seq !== state.seq) return;
+    state.labels = []; state.errors = []; state.phase = 'failed';
   }
+  render();
+}
+
+function confirmPrint(total) {
+  const dialog = $('confirm');
+  $('confirmTitle').textContent = `Print ${total} ${labelsWord(total)}?`;
+  return new Promise((resolve) => {
+    const finish = (answer) => { dialog.close(); resolve(answer); };
+    $('confirmYes').onclick = () => finish(true);
+    $('confirmNo').onclick = () => finish(false);
+    dialog.oncancel = () => resolve(false);
+    dialog.showModal();
+  });
+}
+
+function newJobId() {
+  const bytes = new Uint8Array(12);
+  // getRandomValues works on plain http; crypto.randomUUID would not
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else bytes.forEach((_, i) => { bytes[i] = Math.floor(Math.random() * 256); });
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// The server reports how many labels it has sent while the /print request is still open
+async function pollPrintProgress(jobId) {
+  try {
+    const body = await (await fetch(`/progress/${jobId}`)).json();
+    if (!state.printing || !state.printStatus || !body || !body.stage) return;
+    Object.assign(state.printStatus, { stage: body.stage, done: body.done ?? 0, total: body.total ?? 0 });
+    renderPrintProgress();
+  } catch { /* progress is cosmetic */ }
 }
 
 async function print() {
-  const total = previewLabels * copiesValue();
-  if (total > 10 && !confirm(`Wydrukować ${total} etykiet?`)) return;
-  hideNotice();
-  els.printBtn.disabled = els.previewBtn.disabled = true;
-  els.summary.textContent = 'Drukowanie…';
+  const indices = selectedIndices();
+  const total = indices.length * copies();
+  if (total > 10 && !(await confirmPrint(total))) return;
+  const jobId = newJobId();
+  state.printing = true; state.notice = null;
+  state.printStatus = { uploaded: null, stage: 'unknown', done: 0, total: 0 };
+  renderPrint();
+  const poller = setInterval(() => pollPrintProgress(jobId), 400);
   try {
-    const response = await fetch('/print', { method: 'POST', body: formData() });
-    const body = await readJson(response);
+    const data = new FormData();
+    state.files.forEach((file) => data.append('files', file));
+    data.append('copies', copies());
+    data.append('cut_every', $('cutEvery').value);
+    data.append('cut_at_end', isCutAtEnd() ? 'true' : 'false');
+    data.append('job_id', jobId);
+    indices.forEach((i) => data.append('selected', i));
+    const response = await request('/print', data, {
+      onProgress: (p) => { if (state.printStatus) { state.printStatus.uploaded = p; renderPrintProgress(); } },
+    });
+    const body = await response.json().catch(() => ({}));
     if (response.ok) {
-      showNotice('ok', `Wysłano do druku: ${body.printed} ${plural(body.printed, 'etykieta', 'etykiety', 'etykiet')}.`);
+      state.notice = { kind: 'ok', text: `Sent to the printer: ${body.printed} ${labelsWord(body.printed)}` };
     } else if (response.status === 503) {
-      showNotice('error', 'Drukarka niedostępna: ' + escapeHtml(String(body.detail || '')));
+      state.notice = { kind: 'error', text: 'Printer unavailable', errors: [{ name: 'Printer', code: '', detail: String(body.detail || '') }] };
     } else {
-      const details = Array.isArray(body.errors) && body.errors.length ? errorList(body.errors) : '';
-      showNotice('error', 'Nic nie wydrukowano.' + details);
+      state.notice = { kind: 'error', text: 'Nothing was printed', errors: body.errors };
     }
   } catch {
-    showNotice('error', 'Brak połączenia z serwerem.');
-  } finally {
-    els.previewBtn.disabled = files.length === 0;
-    els.printBtn.disabled = previewLabels === 0;
-    updateSummary();
+    state.notice = { kind: 'error', text: 'Cannot reach the server' };
   }
+  clearInterval(poller);
+  state.printing = false; state.printStatus = null;
+  renderPrint();
 }
 
-els.picker.addEventListener('change', () => { addFiles(els.picker.files); els.picker.value = ''; });
-['dragenter', 'dragover'].forEach((type) => els.drop.addEventListener(type, (event) => {
-  event.preventDefault();
-  els.drop.classList.add('over');
+function setCopies(value) {
+  $('copies').value = Math.min(MAX_COPIES, Math.max(1, value));
+  renderPrint();
+}
+
+$('picker').addEventListener('change', () => { addFiles($('picker').files); $('picker').value = ''; });
+['dragenter', 'dragover'].forEach((type) => $('drop').addEventListener(type, (event) => {
+  event.preventDefault(); $('drop').classList.add('over');
 }));
-['dragleave', 'drop'].forEach((type) => els.drop.addEventListener(type, (event) => {
-  event.preventDefault();
-  els.drop.classList.remove('over');
+['dragleave', 'drop'].forEach((type) => $('drop').addEventListener(type, (event) => {
+  event.preventDefault(); $('drop').classList.remove('over');
 }));
-els.drop.addEventListener('drop', (event) => addFiles(event.dataTransfer.files));
-els.copies.addEventListener('input', updateSummary);
-// Changing the cut options does not change the preview, only the print request
-els.previewBtn.addEventListener('click', preview);
-els.printBtn.addEventListener('click', print);
+$('drop').addEventListener('drop', (event) => addFiles(event.dataTransfer.files));
+$('copies').addEventListener('input', renderPrint);
+$('copiesDown').addEventListener('click', () => setCopies(copies() - 1));
+$('copiesUp').addEventListener('click', () => setCopies(copies() + 1));
+$('cutAtEnd').addEventListener('click', () => {
+  $('cutAtEnd').setAttribute('aria-checked', String(!isCutAtEnd()));
+});
+$('selectAll').addEventListener('click', () => { state.deselected.clear(); renderPreview(); renderPrint(); });
+$('selectNone').addEventListener('click', () => {
+  state.labels.forEach((l) => state.deselected.add(l.name)); renderPreview(); renderPrint();
+});
+$('printBtn').addEventListener('click', print);
+render();
 </script>
 </body>
 </html>

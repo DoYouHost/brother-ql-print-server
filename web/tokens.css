@@ -1,0 +1,231 @@
+/* Bambuddy Design System tokens, copied 1:1 from the design system project
+   (tokens/colors, typography, spacing, effects). Only additions: local font
+   files and the light variant for prefers-color-scheme (the system itself
+   switches light mode with [data-theme="light"] only). */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/web/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/web/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/web/fonts/manrope-latin-ext.woff2') format('woff2');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/web/fonts/manrope-latin.woff2') format('woff2');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* ---- base palette (brand) ---- */
+  --green-500: #5fe08a;
+  --green-600: #34c46e;
+  --green-ink-700: #1f8f4d;
+  --orange-500: #ff9f5c;
+  --orange-600: #e07c36;
+  --blue-400: #4fa6f7;
+  --blue-600: #2c7fe0;
+  --red-400: #ff6b6b;
+  --red-600: #d64545;
+
+  /* ---- dark theme (default / reference) ---- */
+  --bg-1-dark: #131a12;
+  --bg-2-dark: #07090a;
+  --bg-3-dark: #050605;
+  --card-fill-a-dark: #ffffff0d;
+  --card-fill-b-dark: #ffffff04;
+  --card-border-dark: #ffffff12;
+  --subcard-fill-dark: #ffffff08;
+  --subcard-border-dark: #ffffff0d;
+  --groupcard-fill-dark: #ffffff06;
+  --groupcard-border-dark: #ffffff0f;
+  --text-primary-dark: #fbfcf9;
+  --text-secondary-dark: #f2f4ef8c;
+  --text-tertiary-dark: #f2f4ef66;
+  --gauge-track-dark: #ffffff10;
+  --hairline-dark: #ffffff14;
+  --dotted-rule-dark: #ffffff24;
+  --navbar-fill-dark: #00000059;
+  --overlay-surface-dark: #0e1310;
+  --overlay-border-dark: #ffffff24;
+  --on-accent-fill: #0a0c08;
+
+  /* ---- light theme ---- */
+  --bg-1-light: #eaf2e7;
+  --bg-2-light: #f6f8f4;
+  --bg-3-light: #fdfefc;
+  --card-fill-a-light: #ffffff;
+  --card-fill-b-light: #f5f7f3;
+  --card-border-light: #00000014;
+  --subcard-fill-light: #00000005;
+  --subcard-border-light: #0000000f;
+  --groupcard-fill-light: #00000004;
+  --groupcard-border-light: #00000012;
+  --text-primary-light: #10130e;
+  --text-secondary-light: #20231899;
+  --text-tertiary-light: #20231866;
+  --gauge-track-light: #00000014;
+  --hairline-light: #00000014;
+  --dotted-rule-light: #0000001f;
+  --navbar-fill-light: #0000000a;
+  --overlay-surface-light: #f6f8f4;
+  --overlay-border-light: #00000014;
+
+  /* ---- semantic aliases: dark by default ---- */
+  --surface-bg-1: var(--bg-1-dark);
+  --surface-bg-2: var(--bg-2-dark);
+  --surface-bg-3: var(--bg-3-dark);
+  --surface-card-a: var(--card-fill-a-dark);
+  --surface-card-b: var(--card-fill-b-dark);
+  --border-card: var(--card-border-dark);
+  --surface-subcard: var(--subcard-fill-dark);
+  --border-subcard: var(--subcard-border-dark);
+  --surface-groupcard: var(--groupcard-fill-dark);
+  --border-groupcard: var(--groupcard-border-dark);
+  --text-primary: var(--text-primary-dark);
+  --text-secondary: var(--text-secondary-dark);
+  --text-tertiary: var(--text-tertiary-dark);
+  --accent-green: var(--green-500);
+  --accent-green-ink: var(--green-500);
+  --accent-orange: var(--orange-500);
+  --accent-blue: var(--blue-400);
+  --danger: var(--red-400);
+  --gauge-track: var(--gauge-track-dark);
+  --hairline: var(--hairline-dark);
+  --dotted-rule: var(--dotted-rule-dark);
+  --navbar-fill: var(--navbar-fill-dark);
+  --overlay-surface: var(--overlay-surface-dark);
+  --overlay-border: var(--overlay-border-dark);
+
+  /* ---- type ---- */
+  --font-ui: 'Manrope', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --text-screen-title-size: 26px;
+  --text-screen-title-weight: 700;
+  --text-screen-title-tracking: -0.5px;
+  --text-title-size: 18px;
+  --text-title-weight: 700;
+  --text-card-name-size: 20px;
+  --text-card-name-weight: 700;
+  --text-stat-value-size: 40px;
+  --text-stat-value-weight: 700;
+  --text-stat-value-font: var(--font-mono);
+  --text-body-size: 15px;
+  --text-body-weight: 600;
+  --text-secondary-size: 12.5px;
+  --text-secondary-weight: 500;
+  --text-pill-size: 12px;
+  --text-pill-weight: 700;
+  --text-pill-tracking: 0.3px;
+  --text-caption-size: 11px;
+  --text-caption-weight: 500;
+
+  /* ---- spacing + radii ---- */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 9px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 20px;
+  --space-9: 24px;
+  --space-10: 48px;
+  --radius-sm: 14px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+
+  /* ---- effects ---- */
+  --bg-gradient-dark: radial-gradient(ellipse 140% 140% at 22% -20%, var(--bg-1-dark) 0%, var(--bg-2-dark) 55%, var(--bg-3-dark) 100%);
+  --bg-gradient-light: radial-gradient(ellipse 140% 140% at 22% -20%, var(--bg-1-light) 0%, var(--bg-2-light) 55%, var(--bg-3-light) 100%);
+  --bg-gradient: var(--bg-gradient-dark);
+  --card-gradient: linear-gradient(135deg, var(--surface-card-a), var(--surface-card-b));
+  --border-hairline: 1px solid var(--border-card);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+  --surface-bg-1: var(--bg-1-light);
+  --surface-bg-2: var(--bg-2-light);
+  --surface-bg-3: var(--bg-3-light);
+  --surface-card-a: var(--card-fill-a-light);
+  --surface-card-b: var(--card-fill-b-light);
+  --border-card: var(--card-border-light);
+  --surface-subcard: var(--subcard-fill-light);
+  --border-subcard: var(--subcard-border-light);
+  --surface-groupcard: var(--groupcard-fill-light);
+  --border-groupcard: var(--groupcard-border-light);
+  --text-primary: var(--text-primary-light);
+  --text-secondary: var(--text-secondary-light);
+  --text-tertiary: var(--text-tertiary-light);
+  --accent-green: var(--green-600);
+  --accent-green-ink: var(--green-ink-700);
+  --accent-orange: var(--orange-600);
+  --accent-blue: var(--blue-600);
+  --danger: var(--red-600);
+  --gauge-track: var(--gauge-track-light);
+  --hairline: var(--hairline-light);
+  --dotted-rule: var(--dotted-rule-light);
+  --navbar-fill: var(--navbar-fill-light);
+  --overlay-surface: var(--overlay-surface-light);
+  --overlay-border: var(--overlay-border-light);
+  --bg-gradient: var(--bg-gradient-light);
+    color-scheme: light;
+  }
+}
+
+[data-theme="light"] {
+  --surface-bg-1: var(--bg-1-light);
+  --surface-bg-2: var(--bg-2-light);
+  --surface-bg-3: var(--bg-3-light);
+  --surface-card-a: var(--card-fill-a-light);
+  --surface-card-b: var(--card-fill-b-light);
+  --border-card: var(--card-border-light);
+  --surface-subcard: var(--subcard-fill-light);
+  --border-subcard: var(--subcard-border-light);
+  --surface-groupcard: var(--groupcard-fill-light);
+  --border-groupcard: var(--groupcard-border-light);
+  --text-primary: var(--text-primary-light);
+  --text-secondary: var(--text-secondary-light);
+  --text-tertiary: var(--text-tertiary-light);
+  --accent-green: var(--green-600);
+  --accent-green-ink: var(--green-ink-700);
+  --accent-orange: var(--orange-600);
+  --accent-blue: var(--blue-600);
+  --danger: var(--red-600);
+  --gauge-track: var(--gauge-track-light);
+  --hairline: var(--hairline-light);
+  --dotted-rule: var(--dotted-rule-light);
+  --navbar-fill: var(--navbar-fill-light);
+  --overlay-surface: var(--overlay-surface-light);
+  --overlay-border: var(--overlay-border-light);
+  --bg-gradient: var(--bg-gradient-light);
+  color-scheme: light;
+}

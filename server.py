@@ -8,14 +8,16 @@ import base64
 import io
 import os
 import re
+import threading
 import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 import numpy as np
 from pdf2image import convert_from_bytes, pdfinfo_from_bytes
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
@@ -38,17 +40,21 @@ SAFE_HEIGHT = CANVAS_HEIGHT - (MARGIN_Y * 2)
 MAX_COPIES = 50
 MAX_LABELS = 100  # labels in one job, after unpacking zips and splitting PDFs
 MAX_PRINTS = 500  # labels x copies in one job (a DK-11209 roll holds 800)
+PRINT_CHUNK = 5  # copies per write to the printer; also the granularity of the progress report
 MAX_FILE_BYTES = 25 * 1024 * 1024  # per upload and per zip member
 MAX_ZIP_BYTES = 100 * 1024 * 1024  # total unpacked size of one zip
 MAX_ZIP_MEMBERS = 200
 MAX_PIXELS = 20_000_000  # larger bitmaps do not fit the Pi's RAM during preprocessing
 PDF_DPI = 300
+LABEL_MM = (62, 29)
+ASPECT_TOLERANCE = 0.15  # how far a source's proportions may stray from the label's before it is refused
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 LABEL_EXTENSIONS = IMAGE_EXTENSIONS + (".pdf",)
 WEB_DIR = Path(__file__).parent / "web"
 GAP_THRESHOLD = 10  # vertical gaps up to this height do not split a content block
 MIN_GAP = 8  # smallest gap kept between repacked strips
 MAX_SCALE = 2.0
+MAX_GAP_RATIO = 1.0  # a gap never exceeds the typical block height, however much height is left over
 QR_PAD = 6
 QR_TEXT_GAP = 16  # minimum clearance between the text block and the QR code
 # convert() binarizes at ~30% brightness, so anything lighter than this never
@@ -170,32 +176,53 @@ def layout_strips(
         else:
             merged.append(seg)
 
-    strips = [img.crop((min_x, s[0], max_x, s[1])) for s in merged]
+    # Each strip is cropped to its own ink, so a strip can be scaled by its own width limit
+    strips = []
+    for top, bottom in merged:
+        ink_w = int(np.flatnonzero(thresh[top:bottom, min_x:max_x].any(axis=0)).max()) + 1
+        strips.append(img.crop((min_x, top, min_x + ink_w, bottom)))
     gaps = len(strips) - 1
 
     # Reserve room for the gaps up front (at most half the area height) so
     # strips plus gaps can never spill out of the area
     min_gap = min(MIN_GAP, (area_h // 2) // gaps) if gaps else 0
-    scale = min(
-        area_w / (max_x - min_x),
-        (area_h - min_gap * gaps) / sum(s.height for s in strips),
-        MAX_SCALE,
-    )
+
+    # Width caps are per strip: a long line shrinks to fit while the others keep
+    # growing until the height is used. Find the largest common scale that fits.
+    caps = [area_w / s.width for s in strips]
+    budget = area_h - min_gap * gaps
+
+    def total_height(common: float) -> float:
+        return sum(s.height * min(common, cap) for s, cap in zip(strips, caps))
+
+    common = MAX_SCALE
+    if total_height(common) > budget:
+        low, high = 0.0, MAX_SCALE
+        for _ in range(40):
+            mid = (low + high) / 2
+            low, high = (mid, high) if total_height(mid) <= budget else (low, mid)
+        common = low
+    scales = [min(common, cap) for cap in caps]
 
     scaled_strips = [
         s.resize(
             (max(1, int(s.width * scale)), max(1, int(s.height * scale))),
             Image.Resampling.LANCZOS,
         )
-        for s in strips
+        for s, scale in zip(strips, scales)
     ]
 
     free_h = area_h - sum(s.height for s in scaled_strips)
     gap_y = free_h // gaps if gaps else 0
+    if gaps:
+        # Spare height should not tear the lines apart: a gap never exceeds the typical block height
+        typical = round(MAX_GAP_RATIO * sum(s.height for s in scaled_strips) / len(scaled_strips))
+        gap_y = min(gap_y, max(min_gap, typical))
     cur_y = area_y + (free_h - gap_y * gaps) // 2
 
+    # The block keeps the alignment of its widest line; lines stay left-aligned within it
+    pos_x = area_x if align_left else area_x + (area_w - max(s.width for s in scaled_strips)) // 2
     for s in scaled_strips:
-        pos_x = area_x if align_left else area_x + (area_w - s.width) // 2
         canvas.paste(s, (pos_x, cur_y))
         cur_y += s.height + gap_y
 
@@ -277,11 +304,25 @@ def read_limited(stream, limit: int) -> bytes:
     return data
 
 
+def fits_label(width: float, height: float) -> bool:
+    """True when the source has the label's proportions, in either orientation.
+
+    Anything else (an A4 page, a photo) could only be cropped or squeezed onto
+    62 x 29 mm, so it is refused instead of being made to fit.
+    """
+    if min(width, height) <= 0:
+        return False
+    wanted = max(LABEL_MM) / min(LABEL_MM)
+    return abs(max(width, height) / min(width, height) / wanted - 1) <= ASPECT_TOLERANCE
+
+
 def add_image(job: Job, name: str, content: bytes) -> None:
     try:
         source = Image.open(io.BytesIO(content))
         if source.width * source.height > MAX_PIXELS:
             raise LabelError("too_large", f"{source.width}x{source.height} px image")
+        if not fits_label(source.width, source.height):
+            raise LabelError("wrong_format", f"{source.width} × {source.height} px")
         job.labels.append((name, segment_and_repack(source)))
     except LabelError as exc:
         job.fail(name, exc.code, str(exc))
@@ -295,14 +336,23 @@ def add_pdf(job: Job, name: str, content: bytes) -> None:
     try:
         info = pdfinfo_from_bytes(content)
         pages = int(info["Pages"])
-        width_pt, height_pt = map(float, re.findall(r"[\d.]+", info["Page size"])[:2])
+        # Per-page sizes: with a page range pdfinfo reports "Page    N size"
+        sizes = pdfinfo_from_bytes(content, first_page=1, last_page=pages)
+        page_sizes = [
+            tuple(map(float, re.findall(r"[\d.]+", value)[:2]))
+            for key, value in sizes.items()
+            if re.fullmatch(r"Page\s+\d+ size", key)
+        ] or [tuple(map(float, re.findall(r"[\d.]+", info["Page size"])[:2]))]
     except (PDFPageCountError, PDFSyntaxError, KeyError, ValueError) as exc:
         job.fail(name, "unreadable", str(exc))
         return
-    # ponytail: only page 1 is size-checked; a later oversized page would still be rendered
-    if (width_pt / 72 * PDF_DPI) * (height_pt / 72 * PDF_DPI) > MAX_PIXELS:
-        job.fail(name, "too_large", f"page size {width_pt:.0f}x{height_pt:.0f} pt")
-        return
+    for width_pt, height_pt in page_sizes:
+        if not fits_label(width_pt, height_pt):
+            job.fail(name, "wrong_format", f"{width_pt / 72 * 25.4:.0f} × {height_pt / 72 * 25.4:.0f} mm")
+            return
+        if (width_pt / 72 * PDF_DPI) * (height_pt / 72 * PDF_DPI) > MAX_PIXELS:
+            job.fail(name, "too_large", f"page size {width_pt:.0f}x{height_pt:.0f} pt")
+            return
 
     for page in range(1, pages + 1):
         label = name if pages == 1 else f"{name} ({page}/{pages})"
@@ -420,25 +470,30 @@ def dispatch_to_printer(
     copies: int,
     cut_every: int,
     cut_at_end: bool,
+    on_progress: Optional[Callable[[int], None]] = None,
 ) -> None:
     # The cut plan spans the whole job, so cut_every counts labels across files
     plan = iter(cut_plan(len(labels) * copies, cut_every, cut_at_end))
     printed = 0
     for _, img in labels:
         flags = [next(plan) for _ in range(copies)]
-        try:
-            send(
-                instructions=build_instructions(img, flags),
-                printer_identifier=f"file://{PRINTER_DEVICE}",
-                backend_identifier="linux_kernel",
-                blocking=True,
-            )
-        except OSError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Printer {PRINTER_DEVICE} failed after {printed} labels: {exc}",
-            ) from exc
-        printed += copies
+        for start in range(0, copies, PRINT_CHUNK):
+            chunk = flags[start : start + PRINT_CHUNK]
+            try:
+                send(
+                    instructions=build_instructions(img, chunk),
+                    printer_identifier=f"file://{PRINTER_DEVICE}",
+                    backend_identifier="linux_kernel",
+                    blocking=True,
+                )
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Printer {PRINTER_DEVICE} failed after {printed} labels: {exc}",
+                ) from exc
+            printed += len(chunk)
+            if on_progress:
+                on_progress(printed)
 
 
 def png_data_url(img: Image.Image) -> str:
@@ -447,38 +502,77 @@ def png_data_url(img: Image.Image) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-# ponytail: handlers are async but do blocking work, which deliberately serializes
-# jobs on the 512 MB Pi; move to threads plus a lock if concurrent clients matter
+# Progress of running print jobs, keyed by a client-chosen id, so the page can poll while its
+# /print request is still in flight. In memory only; an entry lives as long as its request.
+progress: Dict[str, dict] = {}
+print_lock = threading.Lock()  # one job on the printer at a time
+
+
+@app.get("/progress/{job_id}")
+async def handle_progress(job_id: str):
+    return progress.get(job_id, {"stage": "unknown"})
+
+
+# Plain `def`: FastAPI runs it in a worker thread, so the event loop stays free to answer /progress
 @app.post("/print")
-async def handle_print(
+def handle_print(
     files: List[UploadFile] = File(...),
     copies: int = Form(1, ge=1, le=MAX_COPIES),
     cut_at_end: bool = Form(True),
     cut_every: int = Form(0, ge=0),
+    selected: Optional[List[int]] = Form(None),
+    job_id: Optional[str] = Form(None, pattern=r"^[A-Za-z0-9_-]{8,64}$"),
 ):
+    try:
+        return run_print(files, copies, cut_at_end, cut_every, selected, job_id)
+    finally:
+        progress.pop(job_id, None)
+
+
+def run_print(files, copies, cut_at_end, cut_every, selected, job_id):
+    def track(**fields) -> None:
+        if job_id:
+            progress[job_id] = fields
+
     if not os.path.exists(PRINTER_DEVICE):
         raise HTTPException(
             status_code=503,
             detail=f"Printer {PRINTER_DEVICE} is not connected.",
         )
 
+    track(stage="processing")
     job = build_job(files)
     if job.errors or not job.labels:
         return JSONResponse(
             status_code=400,
             content={"detail": "unusable files, nothing was printed", "errors": job.errors},
         )
-    total = len(job.labels) * copies
+    labels = job.labels
+    if selected is not None:
+        # Indices into the label order /preview returned for the same files
+        valid = selected and len(set(selected)) == len(selected) and all(0 <= i < len(labels) for i in selected)
+        if not valid:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "invalid label selection", "errors": []},
+            )
+        labels = [labels[i] for i in sorted(selected)]
+    total = len(labels) * copies
     if total > MAX_PRINTS:
         return JSONResponse(
             status_code=400,
             content={"detail": f"{total} labels exceeds the limit of {MAX_PRINTS}", "errors": []},
         )
 
-    dispatch_to_printer(job.labels, copies, cut_every, cut_at_end)
+    with print_lock:
+        track(stage="printing", done=0, total=total)
+        dispatch_to_printer(
+            labels, copies, cut_every, cut_at_end,
+            on_progress=lambda done: track(stage="printing", done=done, total=total),
+        )
     return {
         "status": "ok",
-        "labels": len(job.labels),
+        "labels": len(labels),
         "copies": copies,
         "printed": total,
         "cut_at_end": cut_at_end,
@@ -498,3 +592,6 @@ async def handle_preview(files: List[UploadFile] = File(...)):
 @app.get("/", response_class=FileResponse)
 async def web_ui():
     return FileResponse(WEB_DIR / "index.html")
+
+
+app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")

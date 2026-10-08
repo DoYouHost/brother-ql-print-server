@@ -56,11 +56,14 @@ Key objectives:
 │     - Contour detection & bounding boxes                     │
 │     - Y-axis density profile (find gaps > 10px)              │
 │     - Slice content into horizontal strips                   │
-│     - Proportional scaling (clamped to max scale 2.0)        │
-│     - Uniform redistribution of vertical gaps (gap_y)        │
+│     - Per-block scaling: one common scale (max 2.0) fills the│
+│       height; a block wider than the area shrinks on its own │
+│     - Redistribution of spare height into gaps (gap_y), each │
+│       capped at the typical block height; block centred      │
 │  4. Composition: a QR code (found via cv2.QRCodeDetector) is │
 │     redrawn from its module grid, full safe height, flush    │
-│     right; the remaining text is repacked left of it. Without│
+│     right; the remaining text is repacked left of it (gaps   │
+│     capped at the typical block height). Without             │
 │     a QR, strips are centered onto the 696x271 canvas        │
 │  5. Cutter Control:                                          │
 │     - cut_at_end: bool (default: True)                       │
@@ -73,7 +76,9 @@ Key objectives:
 
 ## 4. API Endpoints
 
-A job is any number of uploads of mixed type: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unpacked in memory; members are sorted naturally, hidden files, `__MACOSX`, nested zips and non-label files are skipped).
+A job is any number of uploads of mixed type. Sources must have the label's proportions (62 : 29, either orientation, within 15%); anything else (an A4 page, a photo) is refused with `wrong_format` and the size found, never cropped or squeezed onto the label. A PDF is refused as a whole if any page is off, before it is rendered.
+
+Uploads: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unpacked in memory; members are sorted naturally, hidden files, `__MACOSX`, nested zips and non-label files are skipped).
 
 - **`POST /print`**
   - `multipart/form-data`:
@@ -81,13 +86,18 @@ A job is any number of uploads of mixed type: `.pdf` (every page is a label), `.
     - `copies`: Copies of *each* label (`1` to `50`, default: `1`).
     - `cut_at_end`: Boolean (default: `True`).
     - `cut_every`: Cut after every N-th label counted across the whole job (`0` = OFF, `1` = every label).
+    - `selected`: Optional, repeatable. Indices into the label order `/preview` returned for the same files; only those labels print (omitted = all). The cut plan then spans just the selection.
+    - `job_id`: Optional, `[A-Za-z0-9_-]{8,64}`, chosen by the client. While the request runs, `GET /progress/{job_id}` returns `{stage: processing}` and then `{stage: printing, done, total}` (labels x copies sent so far); unknown or finished ids return `{stage: unknown}`. State is in memory and lives only as long as the request.
   - Responses: `200 OK` (JSON with `labels`, `copies`, `printed`), `400` with an `errors` list (`name`, `code`, `detail`) if any file or page is unusable (nothing is printed), `503` if `/dev/usb/lp0` is missing or the printer fails mid-job (the detail says how many labels were sent).
+  - Printing runs in a worker thread behind a lock (one job on the printer at a time) and sends copies in chunks of 5, so progress is smooth.
   - Limits: 100 labels per job, 500 labels x copies, 25 MB per upload / zip member, 100 MB unpacked per zip, 20 MP per image or PDF page.
 - **`POST /preview`**
   - Form field `files` (same as above).
   - Response: JSON `{labels: [{name, png}], errors: [...]}`, where `png` is a data URL of the exact 696 x 271 layout that would be printed.
 - **`GET /`**
-  - Polish web UI (`web/index.html`): multi-file / zip picker with drag-and-drop, per-file removal, a preview grid of every label, and Print enabled only after a preview without errors.
+  - English web UI (`web/index.html`) built on the Bambuddy Design System (tokens in `web/tokens.css`, copied 1:1 from the design system project; Manrope and JetBrains Mono self-hosted in `web/fonts/` so it works offline). Static files are served under `/web`.
+  - Flow: choosing files starts the preview automatically (debounced, stale responses ignored); every label has a checkbox (all checked by default, deselections survive a refreshed preview); Print is enabled only for a preview without errors and sends the checked indices as `selected`.
+  - Design rules to keep: no shadows or blur, depth from translucent layers and hairlines, green accent, JetBrains Mono for every number, sentence-case terse English copy without emoji.
 
 ---
 

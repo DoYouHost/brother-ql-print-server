@@ -123,15 +123,25 @@ def test_qr_is_full_height_at_right_edge_clear_of_text_and_still_decodes():
 client = TestClient(server.app)
 
 
-def png_bytes(count: int = 2) -> bytes:
+def label_sized(count: int, size=(733, 343)) -> Image.Image:
+    """A 62 x 29 mm label at 300 DPI with `count` dark bars (0 = blank)."""
+    img = Image.new("RGB", size, "white")
+    draw = ImageDraw.Draw(img)
+    for i in range(count):
+        y = 20 + i * 70
+        draw.rectangle((40, y, 600, y + 40), fill="black")
+    return img
+
+
+def png_bytes(count: int = 2, size=(733, 343)) -> bytes:
     buf = io.BytesIO()
-    label_with_bars(count).save(buf, "PNG")
+    label_sized(count, size).save(buf, "PNG")
     return buf.getvalue()
 
 
 def pdf_bytes(pages: int) -> bytes:
     buf = io.BytesIO()
-    imgs = [label_with_bars(1 + i) for i in range(pages)]
+    imgs = [label_sized(1 + i) for i in range(pages)]
     imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:], resolution=300)
     return buf.getvalue()
 
@@ -267,7 +277,135 @@ def test_print_reports_how_many_labels_were_sent_before_a_printer_failure(printe
     assert response.status_code == 503 and "after 2 labels" in response.json()["detail"]
 
 
-def test_web_ui_is_served_in_polish():
-    response = client.get("/")
-    assert response.status_code == 200 and 'lang="pl"' in response.text
-    assert "Cut between" not in response.text and "Cut at end" not in response.text
+def test_web_ui_is_english():
+    import re
+    page = client.get("/").text
+    assert client.get("/").status_code == 200 and 'lang="en"' in page
+    assert not re.search("[ąćęłńóśźż]", page)
+    assert "Choose files" in page and "Select all" in page
+
+
+def test_print_only_the_selected_labels_and_cut_plan_covers_just_them(printer):
+    calls = []
+    real = server.build_instructions
+    server.build_instructions = lambda img, flags: calls.append(list(flags)) or real(img, flags)
+    try:
+        response = client.post(
+            "/print",
+            files=[("files", (n, png_bytes())) for n in ("a.png", "b.png", "c.png")],
+            data={"copies": "2", "cut_every": "0", "cut_at_end": "true", "selected": ["2", "0"]},
+        )
+    finally:
+        server.build_instructions = real
+    assert response.status_code == 200
+    assert response.json()["labels"] == 2 and response.json()["printed"] == 4
+    assert len(printer) == 2                          # a.png and c.png, in job order
+    assert calls == [[False, False], [False, True]]   # one cut, after the last selected copy
+
+
+@pytest.mark.parametrize("selected", [["3"], ["-1"], ["0", "0"]])
+def test_print_rejects_an_invalid_selection(printer, selected):
+    response = client.post(
+        "/print",
+        files=[("files", ("a.png", png_bytes())), ("files", ("b.png", png_bytes()))],
+        data={"selected": selected},
+    )
+    assert response.status_code == 400 and printer == []
+
+
+def test_design_tokens_and_fonts_are_served():
+    assert client.get("/web/tokens.css").status_code == 200
+    assert client.get("/web/fonts/manrope-latin.woff2").status_code == 200
+    assert "--accent-green: var(--green-500)" in client.get("/web/tokens.css").text
+
+
+def test_sources_that_are_not_label_shaped_are_refused_instead_of_squeezed(monkeypatch):
+    a4_png = png_bytes(1, size=(2480, 3508))
+    photo = png_bytes(1, size=(1600, 1200))
+    buf = io.BytesIO()
+    imgs = [label_sized(1), label_sized(1, size=(2480, 3508))]   # label page, then an A4 page
+    imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:], resolution=300)
+
+    # a refused PDF must not even be rendered
+    monkeypatch.setattr(server, "convert_from_bytes", lambda *a, **k: pytest.fail("rendered"))
+    body = preview(("a4.png", a4_png), ("photo.png", photo), ("mixed.pdf", buf.getvalue()),
+                   ("pack.zip", zip_bytes({"a4.png": a4_png})))
+    assert body["labels"] == []
+    assert {e["name"]: e["code"] for e in body["errors"]} == {
+        "a4.png": "wrong_format", "photo.png": "wrong_format", "mixed.pdf": "wrong_format"}
+    assert [e["detail"] for e in body["errors"] if e["name"] == "mixed.pdf"] == ["210 × 297 mm"]
+
+
+def test_label_proportions_are_accepted_in_either_orientation_and_close_sizes():
+    assert server.fits_label(733, 343) and server.fits_label(343, 733)    # 62 x 29 mm, landscape and portrait
+    assert server.fits_label(496, 232)                                    # same label at 203 DPI
+    assert server.fits_label(100, 50) and server.fits_label(70, 30)       # close enough to be scaled safely
+    assert not server.fits_label(210, 297) and not server.fits_label(1600, 1200)
+    assert not server.fits_label(50, 30) and not server.fits_label(0, 10)
+
+
+def test_print_refuses_a_wrong_format_file_and_prints_nothing(printer):
+    response = print_job([("good.png", png_bytes()), ("a4.png", png_bytes(1, size=(2480, 3508)))])
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "wrong_format"
+    assert printer == []
+
+
+def test_print_progress_is_reported_per_chunk_and_cleaned_up(monkeypatch):
+    seen, sends = [], []
+
+    def spy_send(instructions, **_):
+        seen.append(dict(server.progress["job-12345678"]))   # what the page would read right now
+        sends.append(instructions)
+
+    monkeypatch.setattr(server, "PRINTER_DEVICE", "/dev/null")
+    monkeypatch.setattr(server, "send", spy_send)
+    response = client.post(
+        "/print", files=[("files", ("a.png", png_bytes()))], data={"copies": "12", "job_id": "job-12345678"})
+    assert response.status_code == 200
+    assert len(sends) == 3                                    # 12 copies in chunks of 5, 5, 2
+    assert seen == [
+        {"stage": "printing", "done": 0, "total": 12},
+        {"stage": "printing", "done": 5, "total": 12},
+        {"stage": "printing", "done": 10, "total": 12},
+    ]
+    assert "job-12345678" not in server.progress              # gone once the request finished
+    assert client.get("/progress/job-12345678").json() == {"stage": "unknown"}
+
+
+def test_progress_entry_is_removed_even_when_the_job_fails(printer):
+    response = client.post(
+        "/print", files=[("files", ("bad.png", b"nope"))], data={"job_id": "job-87654321"})
+    assert response.status_code == 400
+    assert "job-87654321" not in server.progress
+
+
+@pytest.mark.parametrize("job_id", ["short", "has space 12345", "x" * 65, "semi;colon-1234"])
+def test_print_rejects_a_malformed_job_id(printer, job_id):
+    response = client.post(
+        "/print", files=[("files", ("a.png", png_bytes()))], data={"job_id": job_id})
+    assert response.status_code == 422 and printer == []
+
+
+def test_a_long_line_does_not_tear_the_text_block_apart():
+    # One 520 px line caps the text scale by width, which leaves spare height; the gaps must stay modest
+    img = Image.new("RGB", (733, 343), "white")
+    draw = ImageDraw.Draw(img)
+    for y, h, w in ((20, 24, 190), (64, 20, 110), (104, 34, 520), (158, 52, 140)):
+        draw.rectangle((35, y, 35 + w, y + h), fill="black")
+    qr = cv2.QRCodeEncoder.create().encode("https://example.org/inventory?spool=10")
+    img.paste(Image.fromarray(qr).convert("RGB").resize((125, 125), Image.Resampling.NEAREST), (585, 110))
+
+    out = server.segment_and_repack(img)
+    qr_x = server.CANVAS_WIDTH - server.MARGIN_X - server.SAFE_HEIGHT
+    rows = np.flatnonzero((np.array(out.convert("L"))[:, :qr_x] < 128).any(axis=1))
+    runs = np.split(rows, np.flatnonzero(np.diff(rows) > 1) + 1)
+    heights = [len(r) for r in runs]
+    gaps = [int(runs[i + 1][0] - runs[i][-1] - 1) for i in range(len(runs) - 1)]
+    assert len(runs) == 4
+    assert max(gaps) <= sum(heights) / len(heights) + 1         # no gap taller than a typical block
+    top, bottom = int(rows[0]), server.CANVAS_HEIGHT - 1 - int(rows[-1])
+    assert abs(top - bottom) <= 2                               # the block is centred in the free height
+    # Only the long line is held back by its width; the other lines keep filling the height
+    ratios = [h / src for h, src in zip(heights, (25, 21, 35, 53))]
+    assert ratios[2] < 0.85 * min(ratios[0], ratios[1], ratios[3])
