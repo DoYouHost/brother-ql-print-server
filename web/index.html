@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drukarka etykiet 62×29</title>
+<style>
+  :root {
+    --bg: #eceff1; --card: #fff; --text: #212b36; --muted: #637381;
+    --line: #d0d7de; --accent: #0288d1; --accent-dark: #0277bd;
+    --danger: #c62828; --danger-bg: #fdecea; --ok: #2e7d32; --ok-bg: #e8f5e9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181c; --card: #1e242a; --text: #e6e9ec; --muted: #9aa5b1;
+      --line: #36404a; --danger-bg: #3b1d1d; --ok-bg: #1b3320;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text);
+         font: 16px/1.4 system-ui, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; }
+  .card { background: var(--card); border-radius: 8px; padding: 24px;
+          box-shadow: 0 4px 10px rgba(0,0,0,.1); margin-bottom: 16px; }
+  h1 { margin: 0 0 4px; font-size: 1.5rem; }
+  h2 { margin: 0 0 12px; font-size: 1.1rem; }
+  .hint { color: var(--muted); font-size: .9rem; margin: 0; }
+
+  .drop { display: block; margin-top: 16px; padding: 28px 16px; text-align: center;
+          border: 2px dashed var(--line); border-radius: 8px; cursor: pointer; }
+  .drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent); }
+  .drop strong { color: var(--accent); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  ul.files { list-style: none; margin: 12px 0 0; padding: 0; }
+  ul.files li { display: flex; align-items: center; gap: 8px; padding: 6px 0;
+                border-bottom: 1px solid var(--line); }
+  ul.files .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ul.files .size { color: var(--muted); font-size: .85rem; }
+  .icon-btn { border: 0; background: none; color: var(--muted); font-size: 1.2rem;
+              cursor: pointer; padding: 0 6px; }
+  .icon-btn:hover { color: var(--danger); }
+
+  .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  label.field { display: block; font-size: .9rem; }
+  label.field input, label.field select { width: 100%; margin-top: 4px; padding: 8px; font: inherit;
+        color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 4px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
+  button.primary, button.secondary { padding: 10px 20px; font: inherit; font-weight: 600;
+        border-radius: 4px; cursor: pointer; border: 1px solid var(--accent); }
+  button.primary { background: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { background: var(--accent-dark); }
+  button.secondary { background: none; color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .summary { color: var(--muted); }
+
+  .notice { margin-top: 16px; padding: 10px 14px; border-radius: 4px; }
+  .notice.error { background: var(--danger-bg); color: var(--danger); }
+  .notice.ok { background: var(--ok-bg); color: var(--ok); }
+  .notice ul { margin: 6px 0 0; padding-left: 20px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  figure { margin: 0; }
+  figure img { display: block; width: 100%; height: auto; aspect-ratio: 696 / 271; border: 1px solid var(--line);
+               border-radius: 6px; background: #fff; }
+  figcaption { margin-top: 4px; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <h1>Drukarka etykiet 62×29</h1>
+    <p class="hint">PDF, PNG, JPG lub ZIP z wieloma plikami. Każda strona PDF to osobna etykieta.</p>
+
+    <label class="drop" id="drop">
+      <input class="sr-only" type="file" id="picker" multiple
+             accept=".pdf,.png,.jpg,.jpeg,.zip,application/pdf,image/png,image/jpeg,application/zip">
+      <strong>Wybierz pliki</strong> lub przeciągnij je tutaj
+    </label>
+    <ul class="files" id="fileList"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Ustawienia wydruku</h2>
+    <div class="options">
+      <label class="field">Liczba kopii każdej etykiety (1–50)
+        <input type="number" id="copies" value="1" min="1" max="50">
+      </label>
+      <label class="field">Cięcie między etykietami
+        <select id="cutEvery">
+          <option value="0" selected>Wyłączone (jeden ciągły pasek)</option>
+          <option value="1">Po każdej etykiecie</option>
+          <option value="2">Co 2 etykiety</option>
+          <option value="3">Co 3 etykiety</option>
+          <option value="4">Co 4 etykiety</option>
+          <option value="5">Co 5 etykiet</option>
+          <option value="10">Co 10 etykiet</option>
+        </select>
+      </label>
+    </div>
+    <label class="check"><input type="checkbox" id="cutAtEnd" checked> Odetnij na końcu zadania</label>
+
+    <div class="actions">
+      <button class="secondary" id="previewBtn" disabled>Podgląd</button>
+      <button class="primary" id="printBtn" disabled>Drukuj</button>
+      <span class="summary" id="summary"></span>
+    </div>
+    <div id="notice" hidden></div>
+  </section>
+
+  <section class="card" id="previewCard" hidden>
+    <h2>Podgląd</h2>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<script>
+const ACCEPT = /\.(pdf|png|jpe?g|zip)$/i;
+const $ = (id) => document.getElementById(id);
+const els = {
+  drop: $('drop'), picker: $('picker'), fileList: $('fileList'), copies: $('copies'),
+  cutEvery: $('cutEvery'), cutAtEnd: $('cutAtEnd'), previewBtn: $('previewBtn'),
+  printBtn: $('printBtn'), summary: $('summary'), notice: $('notice'),
+  previewCard: $('previewCard'), grid: $('grid'),
+};
+
+// Server error codes -> Polish messages
+const ERRORS = {
+  no_content: 'brak treści do wydruku',
+  unreadable: 'nie można odczytać pliku',
+  too_large: 'plik jest za duży',
+  too_many: 'za dużo etykiet w jednym zadaniu',
+  unsupported: 'nieobsługiwany typ pliku (tylko PDF, PNG, JPG, ZIP)',
+  zip_unreadable: 'nie można otworzyć archiwum ZIP',
+  zip_limits: 'archiwum ZIP przekracza limity',
+  password: 'plik zabezpieczony hasłem',
+};
+
+let files = [];          // File objects chosen so far
+let previewLabels = 0;   // labels in the last clean preview; 0 = print not allowed
+
+function plural(n, one, few, many) {
+  const last = n % 10, tens = n % 100;
+  if (n === 1) return one;
+  return last >= 2 && last <= 4 && !(tens >= 12 && tens <= 14) ? few : many;
+}
+
+function formatSize(bytes) {
+  return bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + ' KB'
+                         : (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function showNotice(kind, html) {
+  els.notice.className = 'notice ' + kind;
+  els.notice.innerHTML = html;
+  els.notice.hidden = false;
+}
+
+function hideNotice() { els.notice.hidden = true; }
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function copiesValue() {
+  const n = parseInt(els.copies.value, 10);
+  return Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1;
+}
+
+function updateSummary() {
+  if (!previewLabels) { els.summary.textContent = ''; return; }
+  const copies = copiesValue();
+  els.summary.textContent =
+    `${previewLabels} ${plural(previewLabels, 'etykieta', 'etykiety', 'etykiet')} × ` +
+    `${copies} ${plural(copies, 'kopia', 'kopie', 'kopii')} = ${previewLabels * copies}`;
+}
+
+// A changed file list makes the preview stale, so printing is locked until it is refreshed
+function invalidatePreview() {
+  previewLabels = 0;
+  els.printBtn.disabled = true;
+  els.previewCard.hidden = true;
+  els.grid.replaceChildren();
+  updateSummary();
+}
+
+function renderFiles() {
+  els.fileList.replaceChildren(...files.map((file, index) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="name"></span><span class="size"></span>' +
+                   '<button class="icon-btn" type="button" aria-label="Usuń plik">✕</button>';
+    li.querySelector('.name').textContent = file.name;
+    li.querySelector('.size').textContent = formatSize(file.size);
+    li.querySelector('button').addEventListener('click', () => {
+      files.splice(index, 1);
+      filesChanged();
+    });
+    return li;
+  }));
+}
+
+function filesChanged() {
+  renderFiles();
+  invalidatePreview();
+  hideNotice();
+  els.previewBtn.disabled = files.length === 0;
+}
+
+function addFiles(list) {
+  const rejected = [];
+  for (const file of list) {
+    if (!ACCEPT.test(file.name)) rejected.push(file.name);
+    else if (!files.some((f) => f.name === file.name && f.size === file.size)) files.push(file);
+  }
+  filesChanged();
+  if (rejected.length) {
+    showNotice('error', 'Pominięto nieobsługiwane pliki: ' + rejected.map(escapeHtml).join(', '));
+  }
+}
+
+function formData() {
+  const data = new FormData();
+  files.forEach((file) => data.append('files', file));
+  data.append('copies', copiesValue());
+  data.append('cut_every', els.cutEvery.value);
+  data.append('cut_at_end', els.cutAtEnd.checked ? 'true' : 'false');
+  return data;
+}
+
+function errorList(errors) {
+  return '<ul>' + errors.map((e) =>
+    `<li><strong>${escapeHtml(e.name)}</strong>: ${escapeHtml(ERRORS[e.code] || e.detail)}</li>`
+  ).join('') + '</ul>';
+}
+
+async function readJson(response) {
+  try { return await response.json(); } catch { return {}; }
+}
+
+async function preview() {
+  hideNotice();
+  invalidatePreview();
+  els.previewBtn.disabled = true;
+  els.summary.textContent = 'Przetwarzanie…';
+  try {
+    const response = await fetch('/preview', { method: 'POST', body: formData() });
+    const body = await readJson(response);
+    if (!response.ok) {
+      showNotice('error', 'Nie udało się wygenerować podglądu.');
+      return;
+    }
+    els.grid.replaceChildren(...body.labels.map((label) => {
+      const figure = document.createElement('figure');
+      const img = document.createElement('img');
+      img.src = label.png;
+      img.alt = label.name;
+      const caption = document.createElement('figcaption');
+      caption.textContent = caption.title = label.name;
+      figure.append(img, caption);
+      return figure;
+    }));
+    els.previewCard.hidden = body.labels.length === 0;
+    if (body.errors.length) {
+      showNotice('error', 'Wydruk zablokowany, dopóki są błędy. Usuń wadliwe pliki lub popraw archiwum:' +
+                          errorList(body.errors));
+    } else {
+      previewLabels = body.labels.length;
+      els.printBtn.disabled = previewLabels === 0;
+    }
+  } catch {
+    showNotice('error', 'Brak połączenia z serwerem.');
+  } finally {
+    els.previewBtn.disabled = files.length === 0;
+    updateSummary();
+  }
+}
+
+async function print() {
+  const total = previewLabels * copiesValue();
+  if (total > 10 && !confirm(`Wydrukować ${total} etykiet?`)) return;
+  hideNotice();
+  els.printBtn.disabled = els.previewBtn.disabled = true;
+  els.summary.textContent = 'Drukowanie…';
+  try {
+    const response = await fetch('/print', { method: 'POST', body: formData() });
+    const body = await readJson(response);
+    if (response.ok) {
+      showNotice('ok', `Wysłano do druku: ${body.printed} ${plural(body.printed, 'etykieta', 'etykiety', 'etykiet')}.`);
+    } else if (response.status === 503) {
+      showNotice('error', 'Drukarka niedostępna: ' + escapeHtml(String(body.detail || '')));
+    } else {
+      const details = Array.isArray(body.errors) && body.errors.length ? errorList(body.errors) : '';
+      showNotice('error', 'Nic nie wydrukowano.' + details);
+    }
+  } catch {
+    showNotice('error', 'Brak połączenia z serwerem.');
+  } finally {
+    els.previewBtn.disabled = files.length === 0;
+    els.printBtn.disabled = previewLabels === 0;
+    updateSummary();
+  }
+}
+
+els.picker.addEventListener('change', () => { addFiles(els.picker.files); els.picker.value = ''; });
+['dragenter', 'dragover'].forEach((type) => els.drop.addEventListener(type, (event) => {
+  event.preventDefault();
+  els.drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach((type) => els.drop.addEventListener(type, (event) => {
+  event.preventDefault();
+  els.drop.classList.remove('over');
+}));
+els.drop.addEventListener('drop', (event) => addFiles(event.dataTransfer.files));
+els.copies.addEventListener('input', updateSummary);
+// Changing the cut options does not change the preview, only the print request
+els.previewBtn.addEventListener('click', preview);
+els.printBtn.addEventListener('click', print);
+</script>
+</body>
+</html>

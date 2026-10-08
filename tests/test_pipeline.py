@@ -1,9 +1,17 @@
-"""Pipeline and cut-plan checks; run with synthetic images, no printer needed."""
+"""Pipeline, batch-upload and cut-plan checks; synthetic images, no printer needed.
+
+Dev dependencies: pytest and httpx (FastAPI TestClient).
+"""
 
 import cv2
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
+
+import io
+import zipfile
+
+from fastapi.testclient import TestClient
 
 import server
 
@@ -78,8 +86,8 @@ def test_cut_plan():
 
 def test_copies_are_not_cumulative():
     img = server.segment_and_repack(label_with_bars(2))
-    one = server.build_instructions(img, 1, 0, False)
-    assert len(server.build_instructions(img, 3, 0, False)) == 3 * len(one)
+    one = server.build_instructions(img, [False])
+    assert len(server.build_instructions(img, [False] * 3)) == 3 * len(one)
 
 
 def label_with_qr(payload: str) -> Image.Image:
@@ -108,3 +116,158 @@ def test_qr_is_full_height_at_right_edge_clear_of_text_and_still_decodes():
 
     decoded, _, _ = cv2.QRCodeDetector().detectAndDecode(np.array(out.convert("L")))
     assert decoded == "spool-43"
+
+
+# --- batch upload, zip, multi-page pdf, endpoints -------------------------------------
+
+client = TestClient(server.app)
+
+
+def png_bytes(count: int = 2) -> bytes:
+    buf = io.BytesIO()
+    label_with_bars(count).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def pdf_bytes(pages: int) -> bytes:
+    buf = io.BytesIO()
+    imgs = [label_with_bars(1 + i) for i in range(pages)]
+    imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:], resolution=300)
+    return buf.getvalue()
+
+
+def zip_bytes(members: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+    return buf.getvalue()
+
+
+def preview(*uploads):
+    response = client.post("/preview", files=[("files", u) for u in uploads])
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_preview_accepts_mixed_files_and_every_pdf_page():
+    body = preview(
+        ("a.png", png_bytes()), ("b.jpg", png_bytes()), ("c.pdf", pdf_bytes(3))
+    )
+    assert [l["name"] for l in body["labels"]] == ["a.png", "b.jpg", "c.pdf (1/3)", "c.pdf (2/3)", "c.pdf (3/3)"]
+    assert body["errors"] == []
+    assert all(l["png"].startswith("data:image/png;base64,") for l in body["labels"])
+
+
+def test_zip_is_unpacked_in_natural_order_and_clutter_is_skipped():
+    archive = zip_bytes({
+        "labels/label-10.png": png_bytes(),
+        "labels/label-9.png": png_bytes(),
+        "__MACOSX/labels/._label-9.png": b"junk",
+        "labels/.hidden.png": b"junk",
+        "labels/notes.txt": b"hello",
+        "labels/inner.zip": b"PK",
+    })
+    body = preview(("pack.zip", archive))
+    assert [l["name"] for l in body["labels"]] == ["label-9.png", "label-10.png"]
+    assert body["errors"] == []
+
+
+def test_zip_member_path_is_reduced_to_its_basename():
+    body = preview(("pack.zip", zip_bytes({"../../etc/evil.png": png_bytes()})))
+    assert [l["name"] for l in body["labels"]] == ["evil.png"]
+
+
+def test_broken_files_are_reported_per_file_without_hiding_good_ones():
+    body = preview(
+        ("good.png", png_bytes()),
+        ("bad.png", b"not an image"),
+        ("blank.png", png_bytes(0)),
+        ("notes.txt", b"hello"),
+        ("broken.zip", b"not a zip"),
+    )
+    assert [l["name"] for l in body["labels"]] == ["good.png"]
+    codes = {e["name"]: e["code"] for e in body["errors"]}
+    assert codes == {
+        "bad.png": "unreadable",
+        "blank.png": "no_content",
+        "notes.txt": "unsupported",
+        "broken.zip": "zip_unreadable",
+    }
+
+
+def test_oversized_zip_member_is_rejected(monkeypatch):
+    monkeypatch.setattr(server, "MAX_FILE_BYTES", 1000)
+    body = preview(("pack.zip", zip_bytes({"big.png": png_bytes()})))
+    assert body["labels"] == [] and body["errors"][0]["code"] == "too_large"
+
+
+def test_label_limit_is_enforced_once(monkeypatch):
+    monkeypatch.setattr(server, "MAX_LABELS", 2)
+    body = preview(("a.png", png_bytes()), ("b.png", png_bytes()), ("c.png", png_bytes()), ("d.png", png_bytes()))
+    assert len(body["labels"]) == 2
+    assert [e["code"] for e in body["errors"]] == ["too_many"]
+
+
+@pytest.fixture
+def printer(monkeypatch):
+    sent = []
+    monkeypatch.setattr(server, "PRINTER_DEVICE", "/dev/null")  # exists, so the 503 guard passes
+    monkeypatch.setattr(server, "send", lambda instructions, **_: sent.append(instructions))
+    return sent
+
+
+def print_job(uploads, **form):
+    return client.post("/print", files=[("files", u) for u in uploads], data=form)
+
+
+def test_print_sends_every_label_times_copies(printer):
+    response = print_job([("a.png", png_bytes()), ("p.pdf", pdf_bytes(2))], copies="3")
+    assert response.status_code == 200
+    assert response.json()["labels"] == 3 and response.json()["printed"] == 9
+    assert len(printer) == 3  # one send per label, copies batched inside it
+
+
+def test_cut_plan_spans_files_not_each_file(printer):
+    # 3 labels x 2 copies, cut every 4th, no cut at end: a flag only on the 4th
+    calls = []
+    real = server.build_instructions
+    server.build_instructions = lambda img, flags: calls.append(list(flags)) or real(img, flags)
+    try:
+        print_job([("a.png", png_bytes()), ("b.png", png_bytes()), ("c.png", png_bytes())],
+                  copies="2", cut_every="4", cut_at_end="false")
+    finally:
+        server.build_instructions = real
+    assert calls == [[False, False], [False, True], [False, False]]
+
+
+def test_print_refuses_everything_when_any_file_is_unusable(printer):
+    response = print_job([("good.png", png_bytes()), ("bad.png", b"nope")])
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["name"] == "bad.png"
+    assert printer == []
+
+
+def test_print_validates_copies_and_job_size(printer, monkeypatch):
+    assert print_job([("a.png", png_bytes())], copies="0").status_code == 422
+    assert print_job([("a.png", png_bytes())], copies="51").status_code == 422
+    monkeypatch.setattr(server, "MAX_PRINTS", 5)
+    assert print_job([("a.png", png_bytes())], copies="6").status_code == 400
+    assert printer == []
+
+
+def test_print_reports_how_many_labels_were_sent_before_a_printer_failure(printer, monkeypatch):
+    def flaky(instructions, **_):
+        if printer:
+            raise OSError("device gone")
+        printer.append(instructions)
+
+    monkeypatch.setattr(server, "send", flaky)
+    response = print_job([("a.png", png_bytes()), ("b.png", png_bytes())], copies="2")
+    assert response.status_code == 503 and "after 2 labels" in response.json()["detail"]
+
+
+def test_web_ui_is_served_in_polish():
+    response = client.get("/")
+    assert response.status_code == 200 and 'lang="pl"' in response.text
+    assert "Cut between" not in response.text and "Cut at end" not in response.text

@@ -4,14 +4,20 @@ FastAPI microservice for a Raspberry Pi Zero 2 W wired to a Brother QL-600
 loaded with DK-11209 labels (62 x 29 mm).
 """
 
+import base64
 import io
 import os
+import re
+import zipfile
+import zlib
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 import numpy as np
-from pdf2image import convert_from_bytes
+from pdf2image import convert_from_bytes, pdfinfo_from_bytes
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 from PIL import Image, ImageDraw
 
@@ -30,6 +36,16 @@ SAFE_WIDTH = CANVAS_WIDTH - (MARGIN_X * 2)
 SAFE_HEIGHT = CANVAS_HEIGHT - (MARGIN_Y * 2)
 
 MAX_COPIES = 50
+MAX_LABELS = 100  # labels in one job, after unpacking zips and splitting PDFs
+MAX_PRINTS = 500  # labels x copies in one job (a DK-11209 roll holds 800)
+MAX_FILE_BYTES = 25 * 1024 * 1024  # per upload and per zip member
+MAX_ZIP_BYTES = 100 * 1024 * 1024  # total unpacked size of one zip
+MAX_ZIP_MEMBERS = 200
+MAX_PIXELS = 20_000_000  # larger bitmaps do not fit the Pi's RAM during preprocessing
+PDF_DPI = 300
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
+LABEL_EXTENSIONS = IMAGE_EXTENSIONS + (".pdf",)
+WEB_DIR = Path(__file__).parent / "web"
 GAP_THRESHOLD = 10  # vertical gaps up to this height do not split a content block
 MIN_GAP = 8  # smallest gap kept between repacked strips
 MAX_SCALE = 2.0
@@ -41,6 +57,10 @@ INK_THRESHOLD = 160
 
 PRINTER_DEVICE = os.getenv("PRINTER_DEVICE", "/dev/usb/lp0")
 MODEL = os.getenv("PRINTER_MODEL", "QL-600")
+
+
+class NoContentError(ValueError):
+    """The image has nothing dark enough to print."""
 
 
 def flatten_to_rgb(img: Image.Image) -> Image.Image:
@@ -115,7 +135,7 @@ def layout_strips(
     )
     boxes = [b for b in map(cv2.boundingRect, contours) if b[2] > 4 and b[3] > 4]
     if not boxes:
-        raise ValueError("no printable content")
+        raise NoContentError("no printable content")
 
     # Dilation inflates the boxes; take the bounds from the ink itself
     ink = np.zeros_like(thresh)
@@ -213,9 +233,158 @@ def segment_and_repack(img: Image.Image) -> Image.Image:
         layout_strips(
             canvas, img, (MARGIN_X, MARGIN_Y, text_w, SAFE_HEIGHT), align_left=True
         )
-    except ValueError:
+    except NoContentError:
         pass  # a label that is only a QR code is fine
     return canvas
+
+
+class LabelError(Exception):
+    """An upload that cannot become a label; `code` is mapped to a message by the web UI."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+
+
+@dataclass
+class Job:
+    labels: List[Tuple[str, Image.Image]] = field(default_factory=list)
+    errors: List[dict] = field(default_factory=list)
+    overflowed: bool = False
+
+    @property
+    def full(self) -> bool:
+        return len(self.labels) >= MAX_LABELS
+
+    def fail(self, name: str, code: str, detail: str) -> None:
+        self.errors.append({"name": name, "code": code, "detail": detail})
+
+    def overflow(self, name: str) -> None:
+        if not self.overflowed:
+            self.overflowed = True
+            self.fail(name, "too_many", f"more than {MAX_LABELS} labels in one job")
+
+
+def natural_key(name: str) -> list:
+    """Sort key that orders label-5 before label-10."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
+
+
+def read_limited(stream, limit: int) -> bytes:
+    data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise LabelError("too_large", f"larger than {limit // 2**20} MB")
+    return data
+
+
+def add_image(job: Job, name: str, content: bytes) -> None:
+    try:
+        source = Image.open(io.BytesIO(content))
+        if source.width * source.height > MAX_PIXELS:
+            raise LabelError("too_large", f"{source.width}x{source.height} px image")
+        job.labels.append((name, segment_and_repack(source)))
+    except LabelError as exc:
+        job.fail(name, exc.code, str(exc))
+    except NoContentError as exc:
+        job.fail(name, "no_content", str(exc))
+    except (ValueError, OSError, Image.DecompressionBombError) as exc:
+        job.fail(name, "unreadable", str(exc))
+
+
+def add_pdf(job: Job, name: str, content: bytes) -> None:
+    try:
+        info = pdfinfo_from_bytes(content)
+        pages = int(info["Pages"])
+        width_pt, height_pt = map(float, re.findall(r"[\d.]+", info["Page size"])[:2])
+    except (PDFPageCountError, PDFSyntaxError, KeyError, ValueError) as exc:
+        job.fail(name, "unreadable", str(exc))
+        return
+    # ponytail: only page 1 is size-checked; a later oversized page would still be rendered
+    if (width_pt / 72 * PDF_DPI) * (height_pt / 72 * PDF_DPI) > MAX_PIXELS:
+        job.fail(name, "too_large", f"page size {width_pt:.0f}x{height_pt:.0f} pt")
+        return
+
+    for page in range(1, pages + 1):
+        label = name if pages == 1 else f"{name} ({page}/{pages})"
+        if job.full:
+            job.overflow(label)
+            return
+        try:
+            # One page at a time: a whole document at 300 DPI exhausts the Pi's RAM
+            image = convert_from_bytes(
+                content, dpi=PDF_DPI, first_page=page, last_page=page
+            )[0]
+            job.labels.append((label, segment_and_repack(image)))
+        except NoContentError as exc:
+            job.fail(label, "no_content", str(exc))
+        except (ValueError, PDFPageCountError, PDFSyntaxError) as exc:
+            job.fail(label, "unreadable", str(exc))
+
+
+def add_zip(job: Job, name: str, content: bytes) -> None:
+    """Unpack in memory (nothing touches the disk, so member paths cannot escape) and add each member."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+        members = [m for m in archive.infolist() if not m.is_dir()]
+    except zipfile.BadZipFile as exc:
+        job.fail(name, "zip_unreadable", str(exc))
+        return
+    if len(members) > MAX_ZIP_MEMBERS:
+        job.fail(name, "zip_limits", f"more than {MAX_ZIP_MEMBERS} entries")
+        return
+
+    unpacked = 0
+    entries = [(PurePosixPath(m.filename.replace("\\", "/")), m) for m in members]
+    for path, member in sorted(entries, key=lambda e: natural_key(e[0].name)):
+        base = path.name
+        # Archive clutter (macOS metadata, hidden files, nested zips, notes) is skipped, not an error
+        if "__MACOSX" in path.parts or base.startswith(".") or not base.lower().endswith(LABEL_EXTENSIONS):
+            continue
+        if job.full:
+            job.overflow(base)
+            return
+        try:
+            with archive.open(member) as stream:
+                data = read_limited(stream, min(MAX_FILE_BYTES, MAX_ZIP_BYTES - unpacked))
+        except LabelError as exc:
+            job.fail(base, exc.code if unpacked + MAX_FILE_BYTES <= MAX_ZIP_BYTES else "zip_limits", str(exc))
+            continue
+        except RuntimeError as exc:  # zipfile raises RuntimeError for encrypted members
+            job.fail(base, "password", str(exc))
+            continue
+        except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError) as exc:
+            job.fail(base, "unreadable", str(exc))
+            continue
+        unpacked += len(data)
+        add_file(job, base, data)
+
+
+def add_file(job: Job, name: str, content: bytes) -> None:
+    lower = name.lower()
+    if lower.endswith(".zip"):
+        add_zip(job, name, content)
+    elif lower.endswith(".pdf"):
+        add_pdf(job, name, content)
+    elif lower.endswith(IMAGE_EXTENSIONS):
+        add_image(job, name, content)
+    else:
+        job.fail(name, "unsupported", "only PDF, PNG, JPG and ZIP are accepted")
+
+
+def build_job(uploads: List[UploadFile]) -> Job:
+    job = Job()
+    for upload in uploads:
+        name = PurePosixPath((upload.filename or "file").replace("\\", "/")).name
+        if job.full:
+            job.overflow(name)
+            break
+        try:
+            content = read_limited(upload.file, MAX_FILE_BYTES)
+        except LabelError as exc:
+            job.fail(name, exc.code, str(exc))
+            continue
+        add_file(job, name, content)
+    return job
 
 
 def cut_plan(copies: int, cut_every: int, cut_at_end: bool) -> List[bool]:
@@ -225,11 +394,9 @@ def cut_plan(copies: int, cut_every: int, cut_at_end: bool) -> List[bool]:
     return plan
 
 
-def build_instructions(
-    img: Image.Image, copies: int, cut_every: int, cut_at_end: bool
-) -> bytes:
+def build_instructions(img: Image.Image, cut_flags: List[bool]) -> bytes:
     instructions = b""
-    for should_cut in cut_plan(copies, cut_every, cut_at_end):
+    for should_cut in cut_flags:
         # convert() returns the raster's whole accumulated data, so a shared
         # BrotherQLRaster would resend every earlier label with each new one
         qlr = BrotherQLRaster(MODEL)
@@ -249,52 +416,42 @@ def build_instructions(
 
 
 def dispatch_to_printer(
-    img: Image.Image,
-    copies: int = 1,
-    cut_at_end: bool = True,
-    cut_every: int = 0,
-):
-    instructions = build_instructions(img, copies, cut_every, cut_at_end)
-    try:
-        send(
-            instructions=instructions,
-            printer_identifier=f"file://{PRINTER_DEVICE}",
-            backend_identifier="linux_kernel",
-            blocking=True,
-        )
-    except OSError as exc:
-        raise HTTPException(
-            status_code=503, detail=f"Printer {PRINTER_DEVICE} unavailable: {exc}"
-        ) from exc
+    labels: List[Tuple[str, Image.Image]],
+    copies: int,
+    cut_every: int,
+    cut_at_end: bool,
+) -> None:
+    # The cut plan spans the whole job, so cut_every counts labels across files
+    plan = iter(cut_plan(len(labels) * copies, cut_every, cut_at_end))
+    printed = 0
+    for _, img in labels:
+        flags = [next(plan) for _ in range(copies)]
+        try:
+            send(
+                instructions=build_instructions(img, flags),
+                printer_identifier=f"file://{PRINTER_DEVICE}",
+                backend_identifier="linux_kernel",
+                blocking=True,
+            )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Printer {PRINTER_DEVICE} failed after {printed} labels: {exc}",
+            ) from exc
+        printed += copies
 
 
-def render_label(content: bytes, filename: Optional[str]) -> Image.Image:
-    """Decode an upload (PDF or image) and run the repack pipeline; 400 on unusable input."""
-    try:
-        if filename and filename.lower().endswith(".pdf"):
-            # First page only: rendering a whole A4 document at 300 DPI exhausts the Pi's RAM
-            pages = convert_from_bytes(content, dpi=300, first_page=1, last_page=1)
-            if not pages:
-                raise ValueError("empty PDF")
-            source = pages[0]
-        else:
-            source = Image.open(io.BytesIO(content))
-        return segment_and_repack(source)
-    except (
-        ValueError,
-        OSError,
-        PDFPageCountError,
-        PDFSyntaxError,
-        Image.DecompressionBombError,
-    ) as exc:
-        raise HTTPException(status_code=400, detail=f"Unusable file: {exc}") from exc
+def png_data_url(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 # ponytail: handlers are async but do blocking work, which deliberately serializes
 # jobs on the 512 MB Pi; move to threads plus a lock if concurrent clients matter
 @app.post("/print")
 async def handle_print(
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     copies: int = Form(1, ge=1, le=MAX_COPIES),
     cut_at_end: bool = Form(True),
     cut_every: int = Form(0, ge=0),
@@ -305,77 +462,39 @@ async def handle_print(
             detail=f"Printer {PRINTER_DEVICE} is not connected.",
         )
 
-    processed = render_label(await file.read(), file.filename)
-    dispatch_to_printer(
-        processed, copies=copies, cut_at_end=cut_at_end, cut_every=cut_every
-    )
+    job = build_job(files)
+    if job.errors or not job.labels:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "unusable files, nothing was printed", "errors": job.errors},
+        )
+    total = len(job.labels) * copies
+    if total > MAX_PRINTS:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"{total} labels exceeds the limit of {MAX_PRINTS}", "errors": []},
+        )
+
+    dispatch_to_printer(job.labels, copies, cut_every, cut_at_end)
     return {
         "status": "ok",
+        "labels": len(job.labels),
         "copies": copies,
+        "printed": total,
         "cut_at_end": cut_at_end,
         "cut_every": cut_every,
     }
 
 
 @app.post("/preview")
-async def handle_preview(file: UploadFile = File(...)):
-    processed = render_label(await file.read(), file.filename)
-    buf = io.BytesIO()
-    processed.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
+async def handle_preview(files: List[UploadFile] = File(...)):
+    job = build_job(files)
+    return {
+        "labels": [{"name": n, "png": png_data_url(img)} for n, img in job.labels],
+        "errors": job.errors,
+    }
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=FileResponse)
 async def web_ui():
-    return """
-    <!DOCTYPE html>
-    <html lang="pl">
-    <head>
-        <meta charset="utf-8">
-        <title>Brother QL-600 Print Server</title>
-        <style>
-            body { font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #eceff1; margin: 0; }
-            .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 420px; }
-            h2 { margin-top: 0; }
-            label { display: block; margin-top: 1rem; font-size: 0.9rem; color: #333; }
-            input, select, button { width: 100%; box-sizing: border-box; margin-top: 0.3rem; }
-            .checkbox-group { display: flex; align-items: center; gap: 8px; margin-top: 1rem; }
-            .checkbox-group input { width: auto; margin: 0; }
-            button { padding: 10px; background: #0288d1; border: none; color: white; border-radius: 4px; font-weight: bold; cursor: pointer; margin-top: 1.5rem; }
-            button:hover { background: #0277bd; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h2>Drukarka Etykiet 62x29</h2>
-            <form action="/print" method="post" enctype="multipart/form-data">
-                <label>Plik etykiety (PDF / PNG):
-                    <input type="file" name="file" accept=".pdf,image/*" required>
-                </label>
-                
-                <label>Liczba kopii:
-                    <input type="number" name="copies" value="1" min="1" max="50">
-                </label>
-
-                <label>Cięcie pośrednie (Cut between):
-                    <select name="cut_every">
-                        <option value="0" selected>Wyłączone (OFF - jeden pasek)</option>
-                        <option value="1">Każda etykieta (co 1)</option>
-                        <option value="2">Co 2 etykiety</option>
-                        <option value="3">Co 3 etykiety</option>
-                        <option value="4">Co 4 etykiety</option>
-                        <option value="5">Co 5 etykiet</option>
-                    </select>
-                </label>
-
-                <div class="checkbox-group">
-                    <input type="checkbox" id="cut_at_end" name="cut_at_end" value="true" checked>
-                    <label for="cut_at_end" style="margin: 0;">Odetnij na końcu serii (Cut at end)</label>
-                </div>
-
-                <button type="submit">Drukuj</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
+    return FileResponse(WEB_DIR / "index.html")

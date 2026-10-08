@@ -73,18 +73,21 @@ Key objectives:
 
 ## 4. API Endpoints
 
+A job is any number of uploads of mixed type: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unpacked in memory; members are sorted naturally, hidden files, `__MACOSX`, nested zips and non-label files are skipped).
+
 - **`POST /print`**
   - `multipart/form-data`:
-    - `file`: Label file (`.pdf`, `.png`, `.jpg`).
-    - `copies`: Integer (`1` to `50`, default: `1`).
-    - `cut_at_end`: Boolean flag (default: `True`).
-    - `cut_every`: Intermediate cut interval (`0` = OFF, `1` = every label, `N` = every N labels).
-  - Responses: `200 OK` (JSON) or `503 Service Unavailable` if printer device `/dev/usb/lp0` is missing.
+    - `files`: One or more label files (repeat the field).
+    - `copies`: Copies of *each* label (`1` to `50`, default: `1`).
+    - `cut_at_end`: Boolean (default: `True`).
+    - `cut_every`: Cut after every N-th label counted across the whole job (`0` = OFF, `1` = every label).
+  - Responses: `200 OK` (JSON with `labels`, `copies`, `printed`), `400` with an `errors` list (`name`, `code`, `detail`) if any file or page is unusable (nothing is printed), `503` if `/dev/usb/lp0` is missing or the printer fails mid-job (the detail says how many labels were sent).
+  - Limits: 100 labels per job, 500 labels x copies, 25 MB per upload / zip member, 100 MB unpacked per zip, 20 MP per image or PDF page.
 - **`POST /preview`**
-  - Form field `file`.
-  - Response: Rendered PNG (696 × 271 px) reflecting the exact layout that would be printed.
+  - Form field `files` (same as above).
+  - Response: JSON `{labels: [{name, png}], errors: [...]}`, where `png` is a data URL of the exact 696 x 271 layout that would be printed.
 - **`GET /`**
-  - Minimalist drag-and-drop web interface for testing and ad-hoc printing from a browser.
+  - Polish web UI (`web/index.html`): multi-file / zip picker with drag-and-drop, per-file removal, a preview grid of every label, and Print enabled only after a preview without errors.
 
 ---
 
@@ -110,7 +113,7 @@ Key objectives:
   - `printer/`: Hardware communication and `brother_ql` raster generation.
   - `api/`: FastAPI route handlers and request models.
   - `web/`: Templates/static UI assets.
-- Automated tests for image segmentation (`segment_and_repack`) must run independently without requiring a physical printer attached (e.g. using synthetic images / test fixtures). They live in `tests/` and run with `pytest`.
+- Automated tests for image segmentation (`segment_and_repack`) must run independently without requiring a physical printer attached (e.g. using synthetic images / test fixtures). They live in `tests/` and run with `pytest` (dev dependencies: `pytest`, `httpx`).
 
 ---
 
