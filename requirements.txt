@@ -1,0 +1,13 @@
+# Core web framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+python-multipart>=0.0.9
+
+# Image & PDF processing
+pillow>=10.0.0
+pdf2image>=1.17.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+
+# Brother QL raster driver (maintained fork; upstream brother_ql has no QL-600)
+brother_ql_inventree>=1.3
