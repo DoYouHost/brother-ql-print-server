@@ -1,7 +1,7 @@
-"""Brother QL-600 print server.
+"""Brother QL print server.
 
-FastAPI microservice for a Raspberry Pi Zero 2 W wired to a Brother QL-600
-loaded with DK-11209 labels (62 x 29 mm).
+FastAPI microservice for a Raspberry Pi (Zero 2 W and up) wired to a Brother QL
+printer. Which printer, label and connection is set in config.py.
 """
 
 import base64
@@ -27,11 +27,16 @@ from brother_ql.backends.helpers import send
 from brother_ql.conversion import convert
 from brother_ql.raster import BrotherQLRaster
 
-app = FastAPI(title="Brother QL-600 Print Server")
+from . import API_VERSION, __version__
+from .config import LABEL_DPI, device_path, find_label, load_settings
 
-# Working canvas (300 DPI, DK-11209 62x29 mm label)
-CANVAS_WIDTH = 696
-CANVAS_HEIGHT = 271
+SETTINGS = load_settings()
+LABEL = find_label(SETTINGS.label)
+
+app = FastAPI(title="Brother QL Print Server", version=__version__)
+
+# Working canvas: the label's printable area in dots (300 DPI)
+CANVAS_WIDTH, CANVAS_HEIGHT = LABEL.dots_printable
 MARGIN_X = 8
 MARGIN_Y = 8
 SAFE_WIDTH = CANVAS_WIDTH - (MARGIN_X * 2)
@@ -45,10 +50,8 @@ MAX_FILE_BYTES = 25 * 1024 * 1024  # per upload and per zip member
 MAX_ZIP_BYTES = 100 * 1024 * 1024  # total unpacked size of one zip
 MAX_ZIP_MEMBERS = 200
 MAX_PIXELS = 20_000_000  # larger bitmaps do not fit the Pi's RAM during preprocessing
-API_VERSION = 1  # bump on a breaking change; advertised over mDNS and in /info
-LABEL_DPI = 300
 PDF_DPI = LABEL_DPI
-LABEL_MM = (62, 29)
+LABEL_MM = LABEL.tape_size
 ASPECT_TOLERANCE = 0.15  # how far a source's proportions may stray from the label's before it is refused
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 LABEL_EXTENSIONS = IMAGE_EXTENSIONS + (".pdf",)
@@ -63,8 +66,14 @@ QR_TEXT_GAP = 16  # minimum clearance between the text block and the QR code
 # prints (frames, shadows) and must not count as content
 INK_THRESHOLD = 160
 
-PRINTER_DEVICE = os.getenv("PRINTER_DEVICE", "/dev/usb/lp0")
-MODEL = os.getenv("PRINTER_MODEL", "QL-600")
+PRINTER_IDENTIFIER = SETTINGS.identifier
+MODEL = SETTINGS.model
+
+
+def printer_connected() -> Optional[bool]:
+    """Whether the printer is there; None when it cannot be told cheaply (network and usb printers)."""
+    device = device_path(PRINTER_IDENTIFIER)
+    return None if device is None else os.path.exists(device)
 
 
 class NoContentError(ValueError):
@@ -456,7 +465,7 @@ def build_instructions(img: Image.Image, cut_flags: List[bool]) -> bytes:
         instructions += convert(
             qlr=qlr,
             images=[img],
-            label="62x29",
+            label=SETTINGS.label,
             rotate="0",
             threshold=70.0,
             dither=False,
@@ -484,14 +493,14 @@ def dispatch_to_printer(
             try:
                 send(
                     instructions=build_instructions(img, chunk),
-                    printer_identifier=f"file://{PRINTER_DEVICE}",
-                    backend_identifier="linux_kernel",
+                    printer_identifier=PRINTER_IDENTIFIER,
+                    backend_identifier=SETTINGS.backend,
                     blocking=True,
                 )
             except OSError as exc:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Printer {PRINTER_DEVICE} failed after {printed} labels: {exc}",
+                    detail=f"Printer {PRINTER_IDENTIFIER} failed after {printed} labels: {exc}",
                 ) from exc
             printed += len(chunk)
             if on_progress:
@@ -516,8 +525,8 @@ async def handle_info():
     return {
         "service": "label-printer",
         "version": API_VERSION,
-        "printer": {"model": MODEL, "connected": os.path.exists(PRINTER_DEVICE)},
-        "label": {"width_mm": LABEL_MM[0], "height_mm": LABEL_MM[1], "dpi": LABEL_DPI},
+        "printer": {"model": MODEL, "connected": printer_connected()},
+        "label": {"id": SETTINGS.label, "width_mm": LABEL_MM[0], "height_mm": LABEL_MM[1], "dpi": LABEL_DPI},
         "limits": {
             "max_copies": MAX_COPIES,
             "max_labels": MAX_LABELS,
@@ -554,10 +563,10 @@ def run_print(files, copies, cut_at_end, cut_every, selected, job_id):
         if job_id:
             progress[job_id] = fields
 
-    if not os.path.exists(PRINTER_DEVICE):
+    if printer_connected() is False:
         raise HTTPException(
             status_code=503,
-            detail=f"Printer {PRINTER_DEVICE} is not connected.",
+            detail=f"Printer {PRINTER_IDENTIFIER} is not connected.",
         )
 
     track(stage="processing")

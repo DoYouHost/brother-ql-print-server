@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+if [ "$1" = purge ]; then
+    rm -f /etc/avahi/services/label-printer.service
+    rm -rf /opt/label-printer
+    deluser --system label-printer >/dev/null 2>&1 || true
+fi
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+exit 0

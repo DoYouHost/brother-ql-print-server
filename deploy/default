@@ -1,0 +1,13 @@
+# Settings for the label printer service. After editing:  sudo systemctl restart label-printer
+# The values below are the defaults; uncomment a line to change it.
+
+# Printer model and the label roll loaded in it (landscape die-cut labels: 62x29, 54x29, 52x29, and 102x51 for QL-1xxx)
+#PRINTER_MODEL=QL-600
+#PRINTER_LABEL=62x29
+
+# Where the printer is: file:///dev/usb/lp0 (USB), tcp://192.168.1.50:9100 (network) or usb://0x04f9:0x20c0 (libusb)
+#PRINTER_IDENTIFIER=file:///dev/usb/lp0
+
+# Address and port the web page and API listen on
+#LABEL_PRINTER_HOST=0.0.0.0
+#LABEL_PRINTER_PORT=8000

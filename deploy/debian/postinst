@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    # System user in group lp, which owns /dev/usb/lp*
+    if ! getent passwd label-printer >/dev/null; then
+        adduser --system --ingroup lp --no-create-home --home /nonexistent --shell /usr/sbin/nologin label-printer
+    fi
+    # Skipped in containers and chroots, where systemd is not running
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        systemctl enable label-printer.service >/dev/null 2>&1 || true
+        systemctl restart label-printer.service || true    # restart, so an upgrade picks up the new code
+    fi
+fi
+exit 0

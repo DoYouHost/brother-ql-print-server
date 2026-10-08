@@ -27,13 +27,13 @@ Key objectives:
 | Parameter | Value / Detail |
 |---|---|
 | **Host** | Raspberry Pi Zero 2 W (Raspberry Pi OS 64-bit, 512 MB RAM) |
-| **Printer** | Brother QL-600 / QL-600B |
+| **Printer** | Brother QL-600 / QL-600B (tested); other QL models are configurable but untested |
 | **Interface** | USB OTG Host -> `/dev/usb/lp0` (or directly via `pyusb`) |
 | **Print Head** | 300 DPI thermal |
-| **Media** | Die-cut labels **DK-11209** (62 × 29 mm, 800 labels/roll) |
-| **Full Canvas (300 DPI)** | `CANVAS_WIDTH = 696 px`, `CANVAS_HEIGHT = 271 px` |
+| **Media** | Landscape die-cut labels, default **DK-11209** (62 × 29 mm, 800 labels/roll); also 54x29, 52x29 and 102x51 (QL-1xxx) |
+| **Full Canvas (300 DPI)** | The label's `dots_printable` from brother_ql: 696 × 271 px for 62x29 (`CANVAS_WIDTH`, `CANVAS_HEIGHT`) |
 | **Safe Margins** | `MARGIN_X = 8 px` (~0.7 mm), `MARGIN_Y = 8 px` (~0.7 mm), inside the canvas |
-| **Safe Printable Area** | `SAFE_WIDTH = 680 px`, `SAFE_HEIGHT = 255 px` |
+| **Safe Printable Area** | Canvas minus the margins: 680 × 255 px for 62x29 |
 
 > **Critical constraint:** No content must exceed the `Safe Area`. The 696 × 271 canvas is already the driver's full imageable area for 62x29 (Brother's PPD: 4.32 8.4 171.36 73.44 pt), so the physical ~1.5 mm side / ~3 mm top-bottom unprintable strips are not ours to spend; the extra 8 px only absorbs feed registration drift.
 
@@ -95,10 +95,10 @@ Uploads: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unp
   - Form field `files` (same as above).
   - Response: JSON `{labels: [{name, png}], errors: [...]}`, where `png` is a data URL of the exact 696 x 271 layout that would be printed.
 - **`GET /info`**
-  - Identity and capabilities: `{service: "label-printer", version, printer: {model, connected}, label: {width_mm, height_mm, dpi}, limits, accepts}`. `version` is `API_VERSION` (bump on breaking changes).
+  - Identity and capabilities: `{service: "label-printer", version, printer: {model, connected}, label: {id, width_mm, height_mm, dpi}, limits, accepts}`. `version` is `API_VERSION` (bump on breaking changes).
 - **Discovery (mDNS / DNS-SD)**
-  - The Pi announces `_labelprinter._tcp` on port 8000 through Avahi, with TXT `v`, `path=/info`, `model`, `label`, `dpi`. Install: `sudo install -m 644 deploy/avahi-label-printer.service /etc/avahi/services/label-printer.service` (Avahi reloads by itself). A test keeps the file in step with `server.py`.
-  - Avahi announces whether or not this server is running, so a client must call `GET /info` after resolving and check `printer.connected`. Prefer the resolved IP over `rpi-label-printer.local`; Android does not resolve `.local` names reliably.
+  - The Pi announces `_labelprinter._tcp` on the configured port through Avahi, with TXT `v`, `path=/info`, `model`, `label`, `dpi`. `python -m label_printer announce install|remove` writes or deletes `/etc/avahi/services/label-printer.service`, generated from the settings; the systemd unit runs it as root around the service, so the announcement exists only while the server runs.
+  - A client should still call `GET /info` after resolving and check `printer.connected` (`null` for network and usb printers, which cannot be probed). Prefer the resolved IP over `rpi-label-printer.local`; Android does not resolve `.local` names reliably.
   - mDNS does not cross VLANs or guest Wi-Fi isolation; clients need a manual address fallback.
   - The API has no authentication: anyone on the LAN can print.
 - **`GET /`**
@@ -117,55 +117,46 @@ Uploads: `.pdf` (every page is a label), `.png`, `.jpg`/`.jpeg`, and `.zip` (unp
 - Render only the first PDF page; a full A4 page at 300 DPI is already ~26 MB.
 
 ### 5.2 Operating System & Permissions
-- Host requires system packages: `poppler-utils` (for `pdf2image`), `libgl1`, `libglib2.0-0`.
-- User must be in group `lp` (`sudo usermod -a -G lp $USER`) for write access to `/dev/usb/lp0`.
-- Environment variable overrides:
-  - `PRINTER_DEVICE`: Default `/dev/usb/lp0`
-  - `PRINTER_MODEL`: Default `QL-600`
+- Host requires system packages: `poppler-utils` (for `pdf2image`), `libgl1`, `libglib2.0-0`, `avahi-daemon`. The package declares them.
+- The service user must be in group `lp` (owner of `/dev/usb/lp*`). The package creates `label-printer` in `lp`.
+- Settings come from the environment (`/etc/default/label-printer` when installed; see `deploy/default`), validated at start by `label_printer/config.py`, which refuses a wrong value with a message that says what to change:
+  - `PRINTER_MODEL`: default `QL-600`; any model brother_ql knows.
+  - `PRINTER_LABEL`: default `62x29`; only landscape die-cut labels (the layout puts text left of a full-height QR code), and wide ones only on QL-1xxx.
+  - `PRINTER_IDENTIFIER`: default `file:///dev/usb/lp0`; `tcp://host:9100` for network printers, `usb://0x04f9:0x20c0` for libusb. `PRINTER_DEVICE=/dev/usb/lp0` still works as the older spelling.
+  - `LABEL_PRINTER_HOST`, `LABEL_PRINTER_PORT`: default `0.0.0.0:8000`.
+- Only the QL-600 over USB is tested on hardware. Network, libusb and other models are wired through the settings but unverified.
 
-### 5.3 Code Structure & Refactoring
-- Current `server.py` and `requirements.txt` serve as the **initial starter reference implementation** to verify physical hardware and driver functionality. Cutting is emitted per label (one raster job each, cut flag from `cut_plan`); how the printer chains uncut labels still needs verifying on hardware.
-- Future refactoring should modularize functionality:
-  - `pipeline/`: Image processing, segmentation, and repacking.
-  - `printer/`: Hardware communication and `brother_ql` raster generation.
-  - `api/`: FastAPI route handlers and request models.
-  - `web/`: Templates/static UI assets.
-- Automated tests for image segmentation (`segment_and_repack`) must run independently without requiring a physical printer attached (e.g. using synthetic images / test fixtures). They live in `tests/` and run with `pytest` (dev dependencies: `pytest`, `httpx`).
+### 5.3 Code Structure
+- `label_printer/` is the package: `config.py` (settings and label tables), `server.py` (image pipeline, job building, printing, FastAPI routes), `announce.py` (Avahi file), `__main__.py` (`python -m label_printer [serve|check|announce]`), `web/` (UI and design tokens). `server.py` is still one module; splitting it into pipeline / printer / api is possible later.
+- Cutting is emitted per label (one raster job each, cut flag from `cut_plan`); how the printer chains uncut labels still needs verifying on hardware.
+- Automated tests must run without a printer (synthetic images, a fake `send`). They live in `tests/` and run with `pytest` (dev dependencies: `pytest`, `httpx`).
 
 ---
 
 ## 6. Development & Deployment
 
-### Local Development:
+### Local development
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+pip install -r requirements.txt pytest httpx
+python -m label_printer check      # validates the settings and looks for the printer
+python -m label_printer            # serves on 0.0.0.0:8000
+pytest
 ```
 
-### Production Systemd Service:
-File: `/etc/systemd/system/label-printer.service`
-```ini
-[Unit]
-Description=Brother QL-600 Print Server
-After=network.target
+### Package (the supported way to install)
+`deploy/build-deb.sh` builds `dist/label-printer_<version>_<arch>.deb` for the machine it runs on (the bundled virtualenv holds compiled wheels, so build on the target architecture and Debian release, e.g. on a Pi). Installing it is `sudo apt install ./label-printer_0.1.0_arm64.deb`; nothing else needs configuring. The package:
+- installs the code and a virtualenv into `/opt/label-printer/`,
+- creates the system user `label-printer` in group `lp`,
+- installs and starts `label-printer.service` (`deploy/label-printer.service`), which announces the service over mDNS while it runs,
+- installs `/etc/default/label-printer` as a conffile (settings survive upgrades and `remove`; `purge` deletes everything).
 
-[Service]
-Type=simple
-User=pi
-Group=lp
-WorkingDirectory=/home/pi/ql-printer-server
-ExecStart=/home/pi/ql-printer-server/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
+`deploy/test-install.sh` verifies a build in a clean Debian 13 container (build, install, announcement, run as the service user, `/info`, remove, purge):
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now label-printer.service
+docker run --rm -v "$PWD":/src:ro debian:13 sh /src/deploy/test-install.sh
 ```
+Releases are plain `.deb` files; bump `__version__` in `label_printer/__init__.py` first.
+
+### Moving a manual install to the package
+A hand-made install (`~/ql-printer-server`, unit `/etc/systemd/system/label-printer.service`, a copy of the Avahi file) overrides the package's unit of the same name: stop and disable it, delete the unit and `/etc/avahi/services/label-printer.service`, run `sudo systemctl daemon-reload`, then install the package.

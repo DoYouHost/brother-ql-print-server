@@ -1,0 +1,23 @@
+[Unit]
+Description=Brother QL print server
+After=network.target avahi-daemon.service
+Wants=avahi-daemon.service
+
+[Service]
+Type=simple
+User=label-printer
+Group=lp
+EnvironmentFile=-/etc/default/label-printer
+# "+" runs these as root, because Avahi reads its service files from a root-owned directory;
+# "-" keeps a failed announcement from stopping the printer from working
+ExecStartPre=-+/opt/label-printer/venv/bin/python -m label_printer announce install
+ExecStart=/opt/label-printer/venv/bin/python -m label_printer
+ExecStopPost=-+/opt/label-printer/venv/bin/python -m label_printer announce remove
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

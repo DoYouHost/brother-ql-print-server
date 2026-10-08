@@ -13,7 +13,7 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-import server
+from label_printer import server
 
 
 def label_with_bars(count: int, bar_h: int = 40, gap: int = 30) -> Image.Image:
@@ -222,7 +222,7 @@ def test_label_limit_is_enforced_once(monkeypatch):
 @pytest.fixture
 def printer(monkeypatch):
     sent = []
-    monkeypatch.setattr(server, "PRINTER_DEVICE", "/dev/null")  # exists, so the 503 guard passes
+    monkeypatch.setattr(server, "PRINTER_IDENTIFIER", "file:///dev/null")  # exists, so the 503 guard passes
     monkeypatch.setattr(server, "send", lambda instructions, **_: sent.append(instructions))
     return sent
 
@@ -358,7 +358,7 @@ def test_print_progress_is_reported_per_chunk_and_cleaned_up(monkeypatch):
         seen.append(dict(server.progress["job-12345678"]))   # what the page would read right now
         sends.append(instructions)
 
-    monkeypatch.setattr(server, "PRINTER_DEVICE", "/dev/null")
+    monkeypatch.setattr(server, "PRINTER_IDENTIFIER", "file:///dev/null")
     monkeypatch.setattr(server, "send", spy_send)
     response = client.post(
         "/print", files=[("files", ("a.png", png_bytes()))], data={"copies": "12", "job_id": "job-12345678"})
@@ -414,26 +414,28 @@ def test_a_long_line_does_not_tear_the_text_block_apart():
 # --- discovery -------------------------------------------------------------------------
 
 def test_info_describes_the_service_and_reflects_the_printer_state(monkeypatch):
-    monkeypatch.setattr(server, "PRINTER_DEVICE", "/dev/null")
+    monkeypatch.setattr(server, "PRINTER_IDENTIFIER", "file:///dev/null")
     info = client.get("/info").json()
     assert info["service"] == "label-printer" and info["version"] == server.API_VERSION
     assert info["printer"] == {"model": server.MODEL, "connected": True}
-    assert info["label"] == {"width_mm": 62, "height_mm": 29, "dpi": 300}
+    assert info["label"] == {"id": "62x29", "width_mm": 62, "height_mm": 29, "dpi": 300}
     assert info["limits"]["max_copies"] == server.MAX_COPIES and info["limits"]["max_labels"] == server.MAX_LABELS
     assert {".pdf", ".png", ".jpg", ".zip"} <= set(info["accepts"])
 
-    monkeypatch.setattr(server, "PRINTER_DEVICE", "/nonexistent/lp0")
+    monkeypatch.setattr(server, "PRINTER_IDENTIFIER", "file:///nonexistent/lp0")
     assert client.get("/info").json()["printer"]["connected"] is False
 
 
 def test_the_avahi_announcement_matches_what_the_server_reports():
     import xml.etree.ElementTree as ET
-    from pathlib import Path
+    from label_printer import announce
+    from label_printer.config import Settings
 
-    service = ET.parse(Path(server.__file__).parent / "deploy" / "avahi-label-printer.service").getroot().find("service")
+    xml = announce.service_xml(Settings())
+    service = ET.fromstring(xml[xml.index("<service-group>"):]).find("service")
     txt = dict(t.text.split("=", 1) for t in service.findall("txt-record"))
-    assert service.findtext("type") == "_labelprinter._tcp"
-    assert int(service.findtext("port")) == 8000                      # the port the unit file starts uvicorn on
-    assert txt["v"] == str(server.API_VERSION) and txt["path"] == "/info"
-    assert txt["model"] == "QL-600"                                   # the default PRINTER_MODEL
-    assert txt["label"] == f"{server.LABEL_MM[0]}x{server.LABEL_MM[1]}" and int(txt["dpi"]) == server.LABEL_DPI
+    info = client.get("/info").json()
+    assert service.findtext("type") == "_labelprinter._tcp" and int(service.findtext("port")) == 8000
+    assert txt["v"] == str(info["version"]) and txt["path"] == "/info"
+    assert txt["model"] == info["printer"]["model"] and txt["label"] == info["label"]["id"]
+    assert int(txt["dpi"]) == info["label"]["dpi"]
