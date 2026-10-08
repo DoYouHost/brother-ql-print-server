@@ -11,6 +11,7 @@ import re
 import threading
 import zipfile
 import zlib
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Optional, Tuple
@@ -284,15 +285,35 @@ class LabelError(Exception):
         self.code = code
 
 
+# pdftoppm runs as a subprocess and OpenCV releases the GIL, so threads give real parallelism
+# on the Pi's four cores; more workers than that only cost RAM
+pool = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1))
+
+
 @dataclass
 class Job:
     labels: List[Tuple[str, Image.Image]] = field(default_factory=list)
+    pending: List[Tuple[str, Future]] = field(default_factory=list)
     errors: List[dict] = field(default_factory=list)
     overflowed: bool = False
 
     @property
     def full(self) -> bool:
-        return len(self.labels) >= MAX_LABELS
+        return len(self.labels) + len(self.pending) >= MAX_LABELS
+
+    def submit(self, name: str, work: Callable, *args) -> None:
+        """Process a label on the pool; `collect` gathers the results in submission order."""
+        self.pending.append((name, pool.submit(work, *args)))
+
+    def collect(self) -> None:
+        for name, future in self.pending:
+            try:
+                self.labels.append((name, future.result()))
+            except NoContentError as exc:
+                self.fail(name, "no_content", str(exc))
+            except (ValueError, OSError, PDFPageCountError, PDFSyntaxError, Image.DecompressionBombError) as exc:
+                self.fail(name, "unreadable", str(exc))
+        self.pending.clear()
 
     def fail(self, name: str, code: str, detail: str) -> None:
         self.errors.append({"name": name, "code": code, "detail": detail})
@@ -334,13 +355,17 @@ def add_image(job: Job, name: str, content: bytes) -> None:
             raise LabelError("too_large", f"{source.width}x{source.height} px image")
         if not fits_label(source.width, source.height):
             raise LabelError("wrong_format", f"{source.width} × {source.height} px")
-        job.labels.append((name, segment_and_repack(source)))
+        job.submit(name, segment_and_repack, source)
     except LabelError as exc:
         job.fail(name, exc.code, str(exc))
-    except NoContentError as exc:
-        job.fail(name, "no_content", str(exc))
     except (ValueError, OSError, Image.DecompressionBombError) as exc:
         job.fail(name, "unreadable", str(exc))
+
+
+def render_page(content: bytes, page: int) -> Image.Image:
+    # One page at a time: a whole document at 300 DPI exhausts the Pi's RAM
+    image = convert_from_bytes(content, dpi=PDF_DPI, first_page=page, last_page=page)[0]
+    return segment_and_repack(image)
 
 
 def add_pdf(job: Job, name: str, content: bytes) -> None:
@@ -370,16 +395,7 @@ def add_pdf(job: Job, name: str, content: bytes) -> None:
         if job.full:
             job.overflow(label)
             return
-        try:
-            # One page at a time: a whole document at 300 DPI exhausts the Pi's RAM
-            image = convert_from_bytes(
-                content, dpi=PDF_DPI, first_page=page, last_page=page
-            )[0]
-            job.labels.append((label, segment_and_repack(image)))
-        except NoContentError as exc:
-            job.fail(label, "no_content", str(exc))
-        except (ValueError, PDFPageCountError, PDFSyntaxError) as exc:
-            job.fail(label, "unreadable", str(exc))
+        job.submit(label, render_page, content, page)
 
 
 def add_zip(job: Job, name: str, content: bytes) -> None:
@@ -445,6 +461,7 @@ def build_job(uploads: List[UploadFile]) -> Job:
             job.fail(name, exc.code, str(exc))
             continue
         add_file(job, name, content)
+    job.collect()
     return job
 
 
@@ -610,10 +627,11 @@ def run_print(files, copies, cut_at_end, cut_every, selected, job_id):
 
 
 @app.post("/preview")
-async def handle_preview(files: List[UploadFile] = File(...)):
+def handle_preview(files: List[UploadFile] = File(...)):
     job = build_job(files)
+    encoded = pool.map(png_data_url, (img for _, img in job.labels))
     return {
-        "labels": [{"name": n, "png": png_data_url(img)} for n, img in job.labels],
+        "labels": [{"name": name, "png": png} for (name, _), png in zip(job.labels, encoded)],
         "errors": job.errors,
     }
 
