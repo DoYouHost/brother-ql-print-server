@@ -12,12 +12,21 @@ VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' label_printer/__init__.py)
 ARCH=$(dpkg --print-architecture)
 PYVER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 PYNEXT=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor + 1}")')
-MAINTAINER=$(printf '%s <%s>' "$(git config user.name || echo unknown)" "$(git config user.email || echo unknown@localhost)")
+if command -v git >/dev/null 2>&1; then
+    MAINTAINER=$(printf '%s <%s>' "$(git config user.name || echo unknown)" "$(git config user.email || echo unknown@localhost)")
+else
+    MAINTAINER="unknown <unknown@localhost>"
+fi
 
-STAGE=$(mktemp -d)
+# Work on the disk, not in /tmp: on Raspberry Pi OS /tmp is a small tmpfs and the OpenCV wheel alone does not fit
+mkdir -p dist
+STAGE=$(mktemp -d dist/.stage.XXXXXX)
+STAGE=$(cd "$STAGE" && pwd)
 trap 'rm -rf "$STAGE"' EXIT
+export TMPDIR="$STAGE/tmp"
+mkdir -p "$TMPDIR"
 PKG="$STAGE/pkg"
-mkdir -p "$PKG/opt/label-printer" "$PKG/lib/systemd/system" "$PKG/etc/default" "$PKG/DEBIAN" dist
+mkdir -p "$PKG/opt/label-printer" "$PKG/lib/systemd/system" "$PKG/etc/default" "$PKG/DEBIAN"
 
 python3 -m venv "$PKG/opt/label-printer/venv"
 "$PKG/opt/label-printer/venv/bin/pip" install --quiet --no-cache-dir --disable-pip-version-check .
