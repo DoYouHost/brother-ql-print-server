@@ -30,11 +30,22 @@
 
   .layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: var(--space-8); align-items: start; }
   .rail { display: flex; flex-direction: column; gap: var(--space-8); position: sticky; top: var(--space-8); }
+  .caption:empty { display: none; }
+  .rail-col { display: contents; }
+  /* Wide screens: the controls are a 2 x 2 grid beside the preview, rows share one height so the edges line up,
+     and the grid stays in view while a long preview scrolls */
+  @media (min-width: 1180px) {
+    .shell { max-width: 1800px; }
+    .layout { grid-template-columns: auto minmax(0, 1fr); }
+    .rail { display: grid; grid-template-columns: repeat(2, minmax(300px, 360px)); align-items: stretch; }
+    .c-files { order: 1; } .c-print { order: 2; } .c-settings { order: 3; } .c-printer { order: 4; }
+    .c-print .btn, .c-printer .btn { margin-top: auto; }
+  }
   /* Narrow screens: files, settings, print, then the (long) preview, so Print needs no scrolling past it */
   @media (max-width: 860px) {
     .layout { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-8); }
     .rail { display: contents; }
-    .c-files { order: 1; } .c-settings { order: 2; } .c-print { order: 3; } .c-preview { order: 4; }
+    .c-files { order: 1; } .c-settings { order: 2; } .c-print { order: 3; } .c-preview { order: 4; } .c-printer { order: 5; }
   }
 
   .card { background: var(--card-gradient); border: var(--border-hairline); border-radius: var(--radius-md);
@@ -84,11 +95,12 @@
   .drop strong { color: var(--accent-green-ink); font-weight: 700; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  ul.files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  ul.files li { display: flex; align-items: center; gap: var(--space-5); padding: var(--space-3) 0;
-                border-top: 1px solid var(--hairline); }
-  ul.files li:first-child { border-top: 0; }
-  ul.files .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* The chosen files sit in the preview card as chips, so the Files card keeps one height */
+  ul.files { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-3); }
+  ul.files:empty { display: none; }
+  ul.files li { display: flex; align-items: center; gap: var(--space-4); padding: 2px 4px 2px var(--space-5);
+                background: var(--surface-subcard); border: 1px solid var(--border-subcard); border-radius: 999px; min-width: 0; }
+  ul.files .name { min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                    font-size: 13px; font-weight: 600; }
   ul.files .size { color: var(--text-tertiary); font-size: var(--text-caption-size); white-space: nowrap; }
   .icon-btn { border: 0; background: none; color: var(--text-secondary); cursor: pointer; padding: var(--space-1);
@@ -139,7 +151,7 @@
               border-radius: var(--space-3); transition: opacity var(--duration-normal) var(--ease-standard); }
   .tile .cap { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-1) var(--space-1); min-width: 0; }
   .tile .label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-secondary-size); font-weight: 600;
-                 display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+                 display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
   .tile .pos { color: var(--text-tertiary); font-size: var(--text-caption-size); }
   .tile:has(input:not(:checked)) img { opacity: .3; }
   .tile:has(input:not(:checked)) .label { color: var(--text-tertiary); }
@@ -188,6 +200,7 @@
 
   <div class="layout">
     <aside class="rail">
+      <div class="rail-col">
       <section class="card c-files" aria-labelledby="h-files">
         <h2 id="h-files">Files</h2>
         <label class="drop" id="drop">
@@ -195,13 +208,8 @@
                  accept=".pdf,.png,.jpg,.jpeg,.zip,application/pdf,image/png,image/jpeg,application/zip">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
           <span><strong>Choose files</strong> or drop them here</span>
-          <span class="caption">PDF, PNG, JPG, ZIP · 62 × 29 mm label, one PDF page is one label</span>
+          <span class="caption" id="dropCaption">PDF, PNG, JPG, ZIP · 62 × 29 mm label, one PDF page is one label</span>
         </label>
-        <ul class="files" id="fileList"></ul>
-        <div class="loading" id="loading" hidden>
-          <div class="progress" id="progress" role="progressbar" aria-label="Preview progress" aria-valuemin="0" aria-valuemax="100"><i id="progressFill"></i></div>
-          <p class="secondary" id="loadingText"></p>
-        </div>
       </section>
 
       <section class="card c-settings" aria-labelledby="h-settings">
@@ -237,6 +245,8 @@
         </div>
       </section>
 
+      </div>
+      <div class="rail-col">
       <section class="card c-print" aria-labelledby="h-print">
         <h2 id="h-print">Print</h2>
         <div class="subcard">
@@ -253,6 +263,30 @@
         </div>
         <div class="notice" id="notice" role="status" hidden></div>
       </section>
+
+      <section class="card c-printer" aria-labelledby="h-printer">
+        <h2 id="h-printer">Printer</h2>
+        <label class="field">
+          <span>Power off when idle</span>
+          <div class="control">
+            <select id="autoOff">
+              <option value="" selected>Keep current</option>
+              <option value="0">Never</option>
+              <option value="10">After 10 minutes</option>
+              <option value="20">After 20 minutes</option>
+              <option value="30">After 30 minutes</option>
+              <option value="40">After 40 minutes</option>
+              <option value="50">After 50 minutes</option>
+              <option value="60">After 60 minutes</option>
+            </select>
+            <svg class="icon chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </label>
+        <p class="caption" id="settingsNote"></p>
+        <button class="btn tonal wide" id="applySettings" type="button" disabled>Apply to printer</button>
+        <div class="notice" id="settingsNotice" role="status" hidden></div>
+      </section>
+      </div>
     </aside>
 
     <section class="card c-preview" aria-labelledby="h-preview">
@@ -262,6 +296,11 @@
         <button class="btn tonal sm" id="selectAll" type="button" hidden>Select all</button>
         <button class="btn tonal sm" id="selectNone" type="button" hidden>Select none</button>
       </div>
+        <ul class="files" id="fileList"></ul>
+        <div class="loading" id="loading" hidden>
+          <div class="progress" id="progress" role="progressbar" aria-label="Preview progress" aria-valuemin="0" aria-valuemax="100"><i id="progressFill"></i></div>
+          <p class="secondary" id="loadingText"></p>
+        </div>
       <div id="errors" class="groupcard notice" hidden></div>
       <div class="skeleton" id="skeleton" aria-hidden="true" hidden>
         <div class="skel"><i></i><b></b></div><div class="skel"><i></i><b></b></div><div class="skel"><i></i><b></b></div>
@@ -313,6 +352,7 @@ const state = {
   notice: null,         // {kind: 'ok' | 'error', text, errors}
   progress: null,       // upload progress 0..1 while the preview request is being sent, else null
   total: null,          // labels the server will send, known once it has queued them
+  previewId: null,      // lets the server print the finished preview without the files
   printStatus: null,    // while printing: {uploaded 0..1|null, stage: unknown|processing|printing, done, total}
   timer: null, seq: 0, abort: null,
 };
@@ -363,7 +403,13 @@ function render() {
   renderPrint();
 }
 
+const DROP_HINT = 'PDF, PNG, JPG, ZIP · 62 × 29 mm label, one PDF page is one label';
+
 function renderFiles() {
+  const n = state.files.length;
+  $('dropCaption').textContent = n
+    ? `${n} ${filesWord(n)} · ${formatSize(state.files.reduce((sum, f) => sum + f.size, 0))} — add more or drop them here`
+    : DROP_HINT;
   $('fileList').replaceChildren(...state.files.map((file, index) => h('li', {},
     h('span', { class: 'name', title: file.name }, file.name),
     h('span', { class: 'size mono' }, formatSize(file.size)),
@@ -451,6 +497,12 @@ function renderPreview() {
   });
 }
 
+// A PDF page is named "<file> (n/total)"; the file is already listed on the left, so the tile only needs the page
+function captionFor(name) {
+  const page = /\((\d+)\/\d+\)$/.exec(name);
+  return page ? `Page ${page[1]}` : name;
+}
+
 function labelTile(label, index) {
   const input = h('input', { type: 'checkbox', class: 'sr-only', 'aria-label': `Print ${label.name}` });
   input.addEventListener('change', () => {
@@ -461,7 +513,7 @@ function labelTile(label, index) {
   return h('label', { class: 'tile' },
     h('img', { src: label.png, alt: label.name }),
     h('span', { class: 'cap' }, input, box,
-      h('span', { class: 'label', title: label.name }, label.name),
+      h('span', { class: 'label', title: label.name }, captionFor(label.name)),
       h('span', { class: 'pos mono' }, String(index + 1))),
   );
 }
@@ -472,7 +524,7 @@ function renderPrint() {
   $('total').textContent = String(picked * n);
   $('totalUnit').textContent = labelsWord(picked * n);
   $('totalNote').textContent = picked
-    ? `${picked} ${labelsWord(picked)} × ${n} ${copiesWord(n)}` : 'none selected';
+    ? `${picked} ${labelsWord(picked)} × ${n} ${copiesWord(n)}` : state.phase === 'loading' ? 'preparing the preview…' : 'none selected';
   $('printBtn').disabled = !canPrint();
   $('printLabel').textContent = state.printing ? 'Printing…' : 'Print';
   renderPrintProgress();
@@ -495,7 +547,7 @@ function errorList(errors) {
 
 function filesChanged() {
   clearTimeout(state.timer);
-  state.labels = []; state.errors = []; state.notice = null; state.progress = null; state.total = null;
+  state.labels = []; state.errors = []; state.notice = null; state.progress = null; state.total = null; state.previewId = null;
   state.phase = state.files.length ? 'loading' : 'idle';
   state.seq++; state.abort?.abort();
   render();
@@ -548,10 +600,12 @@ function stream(url, data, { signal, onProgress, onEvent } = {}) {
     xhr.open('POST', url);
     xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
     xhr.upload.onload = () => onProgress?.(1);
-    xhr.onprogress = () => { if (xhr.status === 200) drain(false); };
+    // A malformed line must fail the request, not leave its promise pending forever
+    const guarded = (final) => { try { drain(final); return true; } catch (error) { reject(error); xhr.abort(); return false; } };
+    xhr.onprogress = () => { if (xhr.status === 200) guarded(false); };
     xhr.onload = () => {
       const ok = xhr.status === 200;
-      if (ok) drain(true);
+      if (ok && !guarded(true)) return;
       resolve({ ok, status: xhr.status });
     };
     xhr.onerror = () => reject(new Error('network error'));
@@ -567,6 +621,7 @@ async function runPreview() {
   try {
     const data = new FormData();
     state.files.forEach((file) => data.append('files', file));
+    let complete = false;   // the last line (errors, preview_id) arrived, so no label is missing
     const response = await stream('/preview/stream', data, {
       signal: state.abort.signal,
       onProgress: (p) => { if (seq === state.seq) { state.progress = p; renderLoading(); } },
@@ -574,12 +629,12 @@ async function runPreview() {
         if (seq !== state.seq) return;
         if ('total' in event) state.total = event.total;
         if (event.label) state.labels.push(event.label);
-        if (event.errors) state.errors = event.errors;
+        if (event.errors) { complete = true; state.errors = event.errors; state.previewId = event.preview_id ?? null; }
         renderPreview(); renderPrint();
       },
     });
     if (seq !== state.seq) return;
-    if (!response.ok) throw new Error('preview failed');
+    if (!response.ok || !complete) throw new Error('preview failed');
     state.phase = 'ready';
   } catch (error) {
     if (error.name === 'AbortError' || seq !== state.seq) return;
@@ -628,16 +683,22 @@ async function print() {
   renderPrint();
   const poller = setInterval(() => pollPrintProgress(jobId), 400);
   try {
-    const data = new FormData();
-    state.files.forEach((file) => data.append('files', file));
-    data.append('copies', copies());
-    data.append('cut_every', $('cutEvery').value);
-    data.append('cut_at_end', isCutAtEnd() ? 'true' : 'false');
-    data.append('job_id', jobId);
-    indices.forEach((i) => data.append('selected', i));
-    const response = await request('/print', data, {
-      onProgress: (p) => { if (state.printStatus) { state.printStatus.uploaded = p; renderPrintProgress(); } },
-    });
+    // The finished preview is printed by id; if the server dropped it, the files are sent again
+    const send = (withFiles) => {
+      const data = new FormData();
+      if (withFiles) state.files.forEach((file) => data.append('files', file));
+      else data.append('preview_id', state.previewId);
+      data.append('copies', copies());
+      data.append('cut_every', $('cutEvery').value);
+      data.append('cut_at_end', isCutAtEnd() ? 'true' : 'false');
+      data.append('job_id', jobId);
+      indices.forEach((i) => data.append('selected', i));
+      return request('/print', data, {
+        onProgress: (p) => { if (state.printStatus) { state.printStatus.uploaded = p; renderPrintProgress(); } },
+      });
+    };
+    let response = state.previewId ? await send(false) : await send(true);
+    if (response.status === 410) { state.previewId = null; response = await send(true); }
     const body = await response.json().catch(() => ({}));
     if (response.ok) {
       state.notice = { kind: 'ok', text: `Sent to the printer: ${body.printed} ${labelsWord(body.printed)}` };
@@ -652,6 +713,49 @@ async function print() {
   clearInterval(poller);
   state.printing = false; state.printStatus = null;
   renderPrint();
+}
+
+// The printer keeps these settings itself and cannot report them back, so the page only remembers
+// what this browser last applied
+const SETTINGS_KEY = 'printerSettings';
+const AUTO_OFF_TEXT = { 0: 'never', 10: 'after 10 minutes', 20: 'after 20 minutes', 30: 'after 30 minutes', 40: 'after 40 minutes', 50: 'after 50 minutes', 60: 'after 60 minutes' };
+
+function lastApplied() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { return {}; }
+}
+
+function renderPrinterSettings() {
+  const last = lastApplied();
+  const parts = [];
+  if (last.autoOff !== undefined) parts.push(`power off ${AUTO_OFF_TEXT[last.autoOff]}`);
+  $('settingsNote').textContent = parts.length ? `Last applied from this browser: ${parts.join(', ')}.` : '';
+  $('applySettings').disabled = state.applying || $('autoOff').value === '';
+}
+
+async function applyPrinterSettings() {
+  const data = new FormData();
+  data.append('auto_off', $('autoOff').value);
+  state.applying = true; renderPrinterSettings();
+  let notice;
+  try {
+    const response = await fetch('/printer/settings', { method: 'POST', body: data });
+    const body = await response.json().catch(() => ({}));
+    if (response.ok) {
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ autoOff: body.auto_off })); } catch { /* private mode: the note is cosmetic */ }
+      $('autoOff').value = '';
+      notice = { kind: 'ok', text: 'Saved in the printer' };
+    } else {
+      notice = { kind: 'error', text: response.status === 503 ? 'Printer unavailable' : 'Not applied', detail: String(body.detail || '') };
+    }
+  } catch {
+    notice = { kind: 'error', text: 'Cannot reach the server' };
+  }
+  state.applying = false;
+  const box = $('settingsNotice');
+  box.hidden = false;
+  box.replaceChildren(h('div', {}, h('span', { class: 'pill ' + (notice.kind === 'ok' ? '' : 'danger') }, h('span', { class: 'dot' }), notice.text)),
+    ...(notice.detail ? [h('p', { class: 'secondary' }, notice.detail)] : []));
+  renderPrinterSettings();
 }
 
 function setCopies(value) {
@@ -678,7 +782,10 @@ $('selectNone').addEventListener('click', () => {
   state.labels.forEach((l) => state.deselected.add(l.name)); renderPreview(); renderPrint();
 });
 $('printBtn').addEventListener('click', print);
+$('autoOff').addEventListener('change', renderPrinterSettings);
+$('applySettings').addEventListener('click', applyPrinterSettings);
 render();
+renderPrinterSettings();
 </script>
 </body>
 </html>

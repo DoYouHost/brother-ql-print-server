@@ -452,3 +452,65 @@ def test_preview_stream_sends_labels_in_order_then_errors():
     assert [e["label"]["name"] for e in events[1:4]] == ["l0.png", "l1.png", "l2.png"]
     assert events[1]["label"]["png"].startswith("data:image/png;base64,")
     assert [e["code"] for e in events[4]["errors"]] == ["wrong_format"]
+
+
+def stream_events(files):
+    response = client.post("/preview/stream", files=files)
+    return [json.loads(line) for line in response.text.splitlines()]
+
+
+def test_print_from_a_streamed_preview_needs_no_files_and_no_processing(printer, monkeypatch):
+    files = [("files", (f"l{i}.png", png_bytes(1 + i), "image/png")) for i in range(2)]
+    preview_id = stream_events(files)[-1]["preview_id"]
+    assert preview_id
+    monkeypatch.setattr(server, "build_job", lambda *_: pytest.fail("the files were processed again"))
+    response = client.post("/print", data={"preview_id": preview_id, "copies": "2", "selected": ["1"]})
+    assert response.status_code == 200 and response.json()["printed"] == 2
+    assert len(printer) == 1  # one label of two selected, both copies in a single chunk
+
+
+def test_unknown_or_expired_preview_id_is_gone_and_a_failed_preview_has_none(printer):
+    response = client.post("/print", data={"preview_id": "x" * 22})
+    assert response.status_code == 410
+    bad = [("files", ("photo.png", png_bytes(1, size=(400, 400)), "image/png"))]
+    assert stream_events(bad)[-1]["preview_id"] is None
+    assert client.post("/print", data={}).status_code == 400
+
+
+def test_preview_cache_expires_and_drops_least_recently_used_over_the_limit():
+    now = [0.0]
+    cache = server.PreviewCache(ttl=10, max_labels=3, clock=lambda: now[0])
+    png = server.png_bytes(label_sized(1))
+    first, second = cache.put([("a", png), ("b", png)]), cache.put([("c", png)])
+    assert cache.get(first)  # touched, so `second` is now the least recently used
+    third = cache.put([("d", png)])
+    assert cache.get(second) is None and cache.get(first) and cache.get(third)
+    now[0] = 11
+    assert cache.get(first) is None and not cache.entries
+
+
+def test_an_unexpected_error_while_processing_a_label_is_reported_not_a_broken_stream(monkeypatch):
+    def explode(_):
+        raise cv2.error("boom")
+
+    monkeypatch.setattr(server, "segment_and_repack", explode)
+    events = stream_events([("files", ("a.png", png_bytes(1), "image/png"))])
+    assert events[0] == {"total": 1}
+    assert [e["code"] for e in events[-1]["errors"]] == ["unreadable"] and events[-1]["preview_id"] is None
+
+
+def test_printer_settings_send_the_documented_bytes(printer):
+    sent = printer
+    assert client.post("/printer/settings", data={"auto_off": "0"}).json() == {"status": "ok", "auto_off": 0}
+    assert sent[-1] == b"\x1b\x40\x1b\x69\x55\x41\x00\x00"
+    client.post("/printer/settings", data={"auto_off": "60"})
+    assert sent[-1] == b"\x1b\x40\x1b\x69\x55\x41\x00\x06"
+
+
+def test_printer_settings_validate_input(printer):
+    assert client.post("/printer/settings", data={}).status_code == 400
+    assert client.post("/printer/settings", data={"auto_off": "15"}).status_code == 400
+    assert client.post("/printer/settings", data={"auto_off": "70"}).status_code == 400
+    assert not printer  # nothing reached the printer
+    info = client.get("/info").json()
+    assert info["printer_settings"]["auto_off_minutes"] == [0, 10, 20, 30, 40, 50, 60]

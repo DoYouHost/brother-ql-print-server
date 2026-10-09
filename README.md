@@ -82,10 +82,10 @@ Same input as `/preview`, but the response is newline-delimited JSON (`applicati
 {"total": 41}
 {"label": {"name": "label-10.png", "png": "data:image/png;base64,..."}}
 ...one line per label, in the order `/print` uses...
-{"errors": [{"name": "photo.jpg", "code": "wrong_format", "detail": "..."}]}
+{"errors": [{"name": "photo.jpg", "code": "wrong_format", "detail": "..."}], "preview_id": "k3Jx..."}
 ```
 
-`total` is the number of labels queued (files rejected up front are not counted); `errors` is always the last line. On a Pi Zero 2 W the first label arrives after about 1.5 s and 41 labels after about 9 s.
+`total` is the number of labels queued (files rejected up front are not counted); `errors` is always the last line. `preview_id` is `null` when there are errors; otherwise `/print` accepts it instead of the files (see below). The server keeps the finished labels in memory for 15 minutes after their last use (500 labels in total, least recently used dropped first). On a Pi Zero 2 W the first label arrives after about 1.5 s and 41 labels after about 9 s.
 
 ### `POST /print`
 
@@ -93,7 +93,8 @@ Same input as `/preview`, but the response is newline-delimited JSON (`applicati
 
 | Field | Default | |
 |---|---|---|
-| `files` | required | As above |
+| `files` | | As above; send these or `preview_id` |
+| `preview_id` | | Print the labels of a `/preview/stream` without uploading or processing the files again |
 | `copies` | `1` | Copies of each label, 1 to 50 |
 | `cut_at_end` | `true` | Cut after the last label |
 | `cut_every` | `0` | Cut after every N-th label of the job (`0` off, `1` every label) |
@@ -103,6 +104,20 @@ Same input as `/preview`, but the response is newline-delimited JSON (`applicati
 Success: `200` `{"status": "ok", "labels": 3, "copies": 2, "printed": 6, "cut_at_end": true, "cut_every": 0}`.
 
 One job prints at a time. If any file is unusable, nothing is printed.
+
+### `POST /printer/settings`
+
+`application/x-www-form-urlencoded` or `multipart/form-data`; The printer stores the setting itself and keeps it across power cycles, so call this once, not before every job.
+
+| Field | Values | |
+|---|---|---|
+| `auto_off` | `0`, `10`, `20`, `30`, `40`, `50`, `60` | Minutes of idle time before the printer powers down; `0` = never. A printer that powered itself down disconnects from USB until its button is pressed |
+
+Success: `200` `{"status": "ok", "auto_off": 0}`. `400` for a missing `auto_off` or one outside the list, `503` if the printer is not connected or the write failed. `GET /info` lists the accepted values under `printer_settings`.
+
+Caveats:
+- The command is not in Brother's documentation (it comes from the reverse-engineered CUPS driver [cups-rastertoql](https://codeberg.org/flap/cups-rastertoql)), and no read-back command is known, so the current value cannot be queried. The web page only shows what that browser applied last.
+- It is confirmed on a QL-600: the printer stayed connected for 10 hours idle and after a power cycle, where it used to switch off after 60 minutes. Other models are untested. The same driver has a `power_on` command (`ESC i U p`, switch on when external power connects); on the QL-600 it had no effect, so it is not offered.
 
 ### `GET /progress/{job_id}`
 
@@ -118,8 +133,9 @@ State is in memory and lives only as long as the request.
 
 | Status | When | Body |
 |---|---|---|
-| `400` | A file or page is unusable, no labels, bad `selected`, or labels × copies over 500 | `{"detail": "...", "errors": [{name, code, detail}]}` (`errors` is empty for the last two) |
+| `400` | A file or page is unusable, no files and no `preview_id`, bad `selected`, or labels × copies over 500 | `{"detail": "...", "errors": [{name, code, detail}]}` (`errors` is empty for the last two) |
 | `422` | Invalid form field (e.g. `copies=0`, malformed `job_id`, no `files`) | FastAPI validation body |
+| `410` | The `preview_id` expired or is unknown; send the files again | `{"detail": "...", "errors": []}` |
 | `503` | Printer not connected, or it failed mid-job | `{"detail": "..."}`; for a mid-job failure the text says how many labels were sent |
 
 Error `code` values (same in `/preview` `errors` and `/print` `400`):

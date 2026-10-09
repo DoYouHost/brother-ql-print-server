@@ -7,8 +7,12 @@ printer. Which printer, label and connection is set in config.py.
 import base64
 import io
 import json
+import logging
 import os
 import re
+import secrets
+import time
+from collections import OrderedDict
 import threading
 import zipfile
 import zlib
@@ -32,6 +36,8 @@ from brother_ql.raster import BrotherQLRaster
 from . import API_VERSION, __version__
 from .config import LABEL_DPI, device_path, find_label, load_settings
 
+logger = logging.getLogger(__name__)
+
 SETTINGS = load_settings()
 LABEL = find_label(SETTINGS.label)
 
@@ -47,6 +53,8 @@ SAFE_HEIGHT = CANVAS_HEIGHT - (MARGIN_Y * 2)
 MAX_COPIES = 50
 MAX_LABELS = 100  # labels in one job, after unpacking zips and splitting PDFs
 MAX_PRINTS = 500  # labels x copies in one job (a DK-11209 roll holds 800)
+PREVIEW_TTL = 15 * 60  # seconds a streamed preview stays printable after its last use
+PREVIEW_CACHE_LABELS = 500  # labels kept across all cached previews; ~15 KB each as PNG
 PRINT_CHUNK = 5  # copies per write to the printer; also the granularity of the progress report
 MAX_FILE_BYTES = 25 * 1024 * 1024  # per upload and per zip member
 MAX_ZIP_BYTES = 100 * 1024 * 1024  # total unpacked size of one zip
@@ -307,7 +315,7 @@ class Job:
         self.pending.append((name, pool.submit(work, *args)))
 
     def results(self) -> Iterator[Tuple[str, Image.Image]]:
-        """Yield finished labels in submission order as they complete; failures go to `errors`."""
+        """Yield finished labels in submission order, awaiting each in turn; failures go to `errors`."""
         while self.pending:
             name, future = self.pending.pop(0)
             try:
@@ -316,6 +324,10 @@ class Job:
                 self.fail(name, "no_content", str(exc))
                 continue
             except (ValueError, OSError, PDFPageCountError, PDFSyntaxError, Image.DecompressionBombError) as exc:
+                self.fail(name, "unreadable", str(exc))
+                continue
+            except Exception as exc:  # a stream has sent its 200 already, so even a bug must end up in `errors`
+                logger.exception("processing %s failed", name)
                 self.fail(name, "unreadable", str(exc))
                 continue
             self.labels.append(label)
@@ -540,10 +552,56 @@ def dispatch_to_printer(
                 on_progress(printed)
 
 
-def png_data_url(img: Image.Image) -> str:
+def png_bytes(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    return buf.getvalue()
+
+
+def png_data_url(img: Image.Image) -> str:
+    return "data:image/png;base64," + base64.b64encode(png_bytes(img)).decode()
+
+
+class PreviewCache:
+    """Finished previews kept in memory, so printing one does not upload and process the files again.
+
+    Labels are stored as PNG (lossless, ~15 KB) instead of images. There is no sweeper thread:
+    expired previews and the least recently used ones over the size limit are dropped whenever
+    the cache is touched, and a restart empties it.
+    """
+
+    def __init__(self, ttl: float, max_labels: int, clock: Callable[[], float] = time.monotonic):
+        self.ttl, self.max_labels, self.clock = ttl, max_labels, clock
+        self.entries: "OrderedDict[str, Tuple[float, List[Tuple[str, bytes]]]]" = OrderedDict()
+        self.lock = threading.Lock()
+
+    def _evict(self) -> None:
+        now = self.clock()
+        for key in [k for k, (used, _) in self.entries.items() if now - used > self.ttl]:
+            del self.entries[key]
+        while self.entries and sum(len(v[1]) for v in self.entries.values()) > self.max_labels:
+            self.entries.popitem(last=False)  # least recently used first
+
+    def put(self, labels: List[Tuple[str, bytes]]) -> str:
+        key = secrets.token_urlsafe(16)
+        with self.lock:
+            self.entries[key] = (self.clock(), labels)
+            self._evict()
+        return key
+
+    def get(self, key: str) -> Optional[List[Tuple[str, Image.Image]]]:
+        with self.lock:
+            self._evict()
+            entry = self.entries.get(key)
+            if entry is None:
+                return None
+            self.entries[key] = (self.clock(), entry[1])
+            self.entries.move_to_end(key)
+            labels = entry[1]
+        return [(name, Image.open(io.BytesIO(png)).convert("RGB")) for name, png in labels]
+
+
+previews = PreviewCache(PREVIEW_TTL, PREVIEW_CACHE_LABELS)
 
 
 # Progress of running print jobs, keyed by a client-chosen id, so the page can poll while its
@@ -567,7 +625,39 @@ async def handle_info():
             "max_file_mb": MAX_FILE_BYTES // 2**20,
         },
         "accepts": list(LABEL_EXTENSIONS) + [".zip"],
+        "printer_settings": {"auto_off_minutes": list(AUTO_OFF_MINUTES)},
     }
+
+
+# ESC i U A <u16 big endian>: undocumented by Brother, taken from the reverse-engineered CUPS driver
+# cups-rastertoql. The printer keeps the setting across power cycles; there is no known way to read it back.
+AUTO_OFF_MINUTES = (0, 10, 20, 30, 40, 50, 60)  # 0 = never
+
+
+def auto_off_command(minutes: int) -> bytes:
+    return b"\x1b\x40" + b"\x1b\x69\x55\x41" + (minutes // 10).to_bytes(2, "big")  # ESC @, then the setting
+
+
+@app.post("/printer/settings")
+def handle_printer_settings(auto_off: Optional[int] = Form(None)):
+    """Store `auto_off` (idle minutes before the printer powers down, 0 = never) in the printer itself."""
+    if auto_off is None:
+        return JSONResponse(status_code=400, content={"detail": "send auto_off"})
+    if auto_off not in AUTO_OFF_MINUTES:
+        return JSONResponse(status_code=400, content={"detail": f"auto_off must be one of {list(AUTO_OFF_MINUTES)}"})
+    if printer_connected() is False:
+        raise HTTPException(status_code=503, detail=f"Printer {PRINTER_IDENTIFIER} is not connected.")
+    with print_lock:
+        try:
+            send(
+                instructions=auto_off_command(auto_off),
+                printer_identifier=PRINTER_IDENTIFIER,
+                backend_identifier=SETTINGS.backend,
+                blocking=False,  # there is no print to wait for
+            )
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail=f"Printer {PRINTER_IDENTIFIER} failed: {exc}") from exc
+    return {"status": "ok", "auto_off": auto_off}
 
 
 @app.get("/progress/{job_id}")
@@ -578,7 +668,8 @@ async def handle_progress(job_id: str):
 # Plain `def`: FastAPI runs it in a worker thread, so the event loop stays free to answer /progress
 @app.post("/print")
 def handle_print(
-    files: List[UploadFile] = File(...),
+    files: List[UploadFile] = File(None),
+    preview_id: Optional[str] = Form(None, pattern=r"^[A-Za-z0-9_-]{16,64}$"),
     copies: int = Form(1, ge=1, le=MAX_COPIES),
     cut_at_end: bool = Form(True),
     cut_every: int = Form(0, ge=0),
@@ -586,12 +677,12 @@ def handle_print(
     job_id: Optional[str] = Form(None, pattern=r"^[A-Za-z0-9_-]{8,64}$"),
 ):
     try:
-        return run_print(files, copies, cut_at_end, cut_every, selected, job_id)
+        return run_print(files, preview_id, copies, cut_at_end, cut_every, selected, job_id)
     finally:
         progress.pop(job_id, None)
 
 
-def run_print(files, copies, cut_at_end, cut_every, selected, job_id):
+def run_print(files, preview_id, copies, cut_at_end, cut_every, selected, job_id):
     def track(**fields) -> None:
         if job_id:
             progress[job_id] = fields
@@ -603,13 +694,23 @@ def run_print(files, copies, cut_at_end, cut_every, selected, job_id):
         )
 
     track(stage="processing")
-    job = build_job(files)
-    if job.errors or not job.labels:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "unusable files, nothing was printed", "errors": job.errors},
-        )
-    labels = job.labels
+    if preview_id:
+        labels = previews.get(preview_id)
+        if labels is None:
+            return JSONResponse(
+                status_code=410,
+                content={"detail": "the preview expired, send the files again", "errors": []},
+            )
+    elif files:
+        job = build_job(files)
+        if job.errors or not job.labels:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "unusable files, nothing was printed", "errors": job.errors},
+            )
+        labels = job.labels
+    else:
+        return JSONResponse(status_code=400, content={"detail": "send files or a preview_id", "errors": []})
     if selected is not None:
         # Indices into the label order /preview returned for the same files
         valid = selected and len(set(selected)) == len(selected) and all(0 <= i < len(labels) for i in selected)
@@ -655,15 +756,21 @@ def handle_preview(files: List[UploadFile] = File(...)):
 @app.post("/preview/stream")
 def handle_preview_stream(files: List[UploadFile] = File(...)):
     """Like /preview, but as newline-delimited JSON, so the page can show labels as they finish:
-    `{"total": n}`, then one `{"label": {name, png}}` per label in order, then `{"errors": [...]}`."""
+    `{"total": n}`, then one `{"label": {name, png}}` per label in order, then
+    `{"errors": [...], "preview_id": id | null}`; /print accepts that id instead of the files."""
     job = start_job(files)  # reads the uploads here, before the request's files are closed
     total = len(job.pending)
 
     def events() -> Iterator[str]:
         yield json.dumps({"total": total}) + "\n"
+        encoded = []
         for name, img in job.results():
-            yield json.dumps({"label": {"name": name, "png": png_data_url(img)}}) + "\n"
-        yield json.dumps({"errors": job.errors}) + "\n"
+            png = png_bytes(img)
+            encoded.append((name, png))
+            yield json.dumps({"label": {"name": name, "png": "data:image/png;base64," + base64.b64encode(png).decode()}}) + "\n"
+        # Only a preview that can be printed is kept
+        preview_id = previews.put(encoded) if encoded and not job.errors else None
+        yield json.dumps({"errors": job.errors, "preview_id": preview_id}) + "\n"
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
 
